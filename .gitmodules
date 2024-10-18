@@ -1,4 +1,3 @@
 [submodule "csp"]
 	path = csp
 	url = git@github.com:TolimanSpace/toliman_csp.git
-	branch = feature/payload-control-service
