@@ -1,18 +1,51 @@
 import logging
 import threading
 
-from simple_pyspin import Camera
+# from simple_pyspin import Camera
+import PySpin
 
 _logger = logging.getLogger(__name__)
 
+_SYSTEM = None
+
+def list_cameras():
+    """
+    Return a list of Spinnaker cameras
+    """
+
+    global _SYSTEM
+
+    if _SYSTEM is None:
+        _SYSTEM = PySpin.System.GetInstance()
+        _logger.info("Starting PySpin system instance")
+
+    return _SYSTEM.GetCameras()
 
 
 class CameraInterface:
+    """
+    A class to interface with a PySpin Camera
+
+    Atributes
+    ---------
+
+    Methods
+    -------
+
+    """
     def __init__(self):
         self._exposure = None
         self._resolution = None
-        self.cam=Camera()
         self._lock = threading.Lock()
+
+        cam_list = list_cameras()
+        if not cam_list.GetSize():
+            _logger.error("No cameras detected")
+            raise RuntimeError("No cameras detected")
+        self.cam = cam_list.GetByIndex(0)
+        cam_list.Clear()
+        self.running = False
+        
 
     @property
     def exposure(self):
@@ -36,16 +69,82 @@ class CameraInterface:
 
     # ... add more properties as required
 
+    def init(self):
+        """
+        Initializes the camera
+        """
+        self.cam.Init()
+        _logger.info("Camera initialized")
+        self.initialized = True
+
+    def __enter__(self):
+        self.init()
+        return self
+    
+    def close(self):
+        """
+        Closes the camera
+        """
+        _logger.info("Stoping camera")
+        self.stop()
+        self.cam.DeInit()
+        del self.cam
+        _logger.info("Camera stopped")
+
+    def __exit__(self, type, value, traceback):
+
+        global _SYSTEM
+
+        self.close()
+        if _SYSTEM is not None:
+            _SYSTEM.ReleaseInstance()
+            _SYSTEM = None
+            _logger.info("Releasing PySpin system instance")
+
+    def start(self):
+        """
+        Start recording images
+        """
+        if not self.running:
+            self.cam.BeginAcquisition()
+            self.running = True
+            _logger.info("Beginning image acquisition")
+
+    def stop(self):
+        """
+        Stop recording images
+        """
+        if self.running:
+            self.cam.EndAcquisition()
+            _logger.info("Ending image acquisiton")
+        self.running = False
+
+
     def apply_settings(self):
         # ... pseudocode to apply the camera settings
         pass
 
     def capture_frame(self):
-        # ... pseudocode to capture a frame
-        pass
+        """
+        Capture an image
+        """
+        with self._lock:
+            image_result = self.cam.GetNextImage(1000)
+
+            if image_result.IsIncomplete():
+                _logger.error(f"Image incomplete with status {image_result.GetImageStatus()}")
+                return None
+            
+            i = image_result.GetFrameID()
+            width = image_result.GetWidth()
+            height = image_result.GetHeight()
+            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height}")
+            image_data = image_result.GetNDArray()
+            image_result.Release()
+            return image_data
 
 
-camera = CameraInterface()
+# camera = CameraInterface()
 
 
 def handle_packet(packet):
