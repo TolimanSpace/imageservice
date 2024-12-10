@@ -34,8 +34,6 @@ class CameraInterface:
 
     """
     def __init__(self):
-        self._exposure = None
-        self._resolution = None
         self._lock = threading.Lock()
 
         cam_list = list_cameras()
@@ -45,27 +43,46 @@ class CameraInterface:
         self.cam = cam_list.GetByIndex(0)
         cam_list.Clear()
         self.running = False
+
+        self.processor = PySpin.ImageProcessor()
+        # Might need to move this next line to a property that can be varied
+        self.processor.SetColorProcessing(PySpin.SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR)
         
 
     @property
     def exposure(self):
-        with self._lock:
-            return self._exposure
+        return self.cam.ExposureTime.GetValue()
 
     @exposure.setter
     def exposure(self, value):
-        with self._lock:
-            self._exposure = value
+        self.cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
+        self.cam.ExposureTime.SetValue(value)
+
+    @property
+    def framerate(self):
+        return self.cam.AcquisitionFrameRate.GetValue()
+        
+    @framerate.setter
+    def framerate(self, value):
+        self.cam.AcquisitionFrameRateEnable.SetValue(True)
+        self.cam.AcquisitionFrameRate.SetValue(value)
 
     @property
     def resolution(self):
-        with self._lock:
-            return self._resolution
+        return self._resolution
 
     @resolution.setter
     def resolution(self, value):
-        with self._lock:
-            self._resolution = value
+        self._resolution = value
+
+    @property
+    def acquisitionmode(self):
+        return self.cam.AcquisitionMode.GetValue()
+        
+    @acquisitionmode.setter
+    def acquisitionmode(self, value):
+        self.cam.AcquisitionMode.SetValue(value)
+        
 
     # ... add more properties as required
 
@@ -120,9 +137,23 @@ class CameraInterface:
         self.running = False
 
 
-    def apply_settings(self):
-        # ... pseudocode to apply the camera settings
-        pass
+    def apply_settings(self, settings):
+        with self._lock:
+            _logger.info(f"Setting camera properties")
+            for setting, value in settings.items():
+                if hasattr(self, setting):
+                    try:
+                        setattr(self, setting, value)
+                        _logger.info(f"Set {setting} to {value}")
+                    except Exception as err:
+                        _logger.error(f"Failed to set {setting}: {err}")
+                else:
+                    _logger.warning(f"Unknown setting: {setting}")
+
+    def apply_pattern(self):
+        with self._lock:
+            self.cam.TestPatternGeneratorSelector.SetValue(PySpin.TestPatternGeneratorSelector_Sensor)
+            self.cam.TestPattern.SetValue(PySpin.TestPattern_SensorTestPattern)
 
     def capture_frame(self):
         """
@@ -135,13 +166,24 @@ class CameraInterface:
                 _logger.error(f"Image incomplete with status {image_result.GetImageStatus()}")
                 return None
             
-            i = image_result.GetFrameID()
-            width = image_result.GetWidth()
-            height = image_result.GetHeight()
-            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height}")
-            image_data = image_result.GetNDArray()
+            # Convert image to correct format and release result
+            image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono8)
             image_result.Release()
-            return image_data
+
+            # Get metadata
+            i = image_converted.GetFrameID()
+            width = image_converted.GetWidth()
+            height = image_converted.GetHeight()
+            timestamp = image_converted.GetTimeStamp()
+            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {timestamp}")
+
+            # Get data
+            image_data = image_converted.GetNDArray()
+
+            # Package data in a dict
+            data = {"i": i, "frame": image_data, "timestamp": timestamp}
+
+            return data
 
 
 # camera = CameraInterface()
