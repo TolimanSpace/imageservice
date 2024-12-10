@@ -1,63 +1,37 @@
 import copy
 import time
 from multiprocessing import Process, Manager, Queue
+import logging
 
 import cv2
 import serial
 
 # from workers.csp import *
 from workers.processing import *
+from workers.camera import CameraInterface
+from dummy_csp import csp_listener
 
 import PySpin
 
 _logger = logging.getLogger(__name__)
+logging.basicConfig(level = logging.DEBUG)
 
 def acquire_frames(output_queue, shared_status):
-    # Set up camera
-    system = PySpin.System.GetInstance()
-    cam_list = system.GetCameras()
-    camera = cam_list[0]
-
-    camera.Init()
-
-    camera.AcquisitionMode.SetValue(PySpin.AcquisitionMode_Continuous)
-    camera.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
-    camera.ExposureTime.SetValue(50)
-    camera.AcquisitionFrameRateEnable.SetValue(True)
-    camera.AcquisitionFrameRate.SetValue(10)
-
-    camera.BeginAcquisition()
-
-    # Set up ImageProcessor instance
-    processor = PySpin.ImageProcessor()
-    processor.SetColorProcessing(PySpin.SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR)
-
     while True:
-        # ret, frame = camera.capture_frame()
-        image_result = camera.GetNextImage(1000)
-        if image_result.IsIncomplete():
-            print('Image incomplete with image status %d ...' % image_result.GetImageStatus())
-        else:
-            # Testing
-            i = image_result.GetFrameID()
-            width = image_result.GetWidth()
-            height = image_result.GetHeight()
-            print('Grabbed Image %d, width = %d, height = %d' % (i, width, height))
-            #
-            image_converted = processor.Convert(image_result, PySpin.PixelFormat_Mono8)
-            frame = image_converted.GetData().reshape(height,width)
-            data = {"i": i, "frame": frame}
-            output_queue.put(data)
-            # Update shared_status
-            shared_status['frame_acquisition'] = 'success'
-            image_result.Release()
-        # time.sleep(0.1)  # Maintain 10 Hz cadence
-    else:
-        camera.EndAcquisition()
-        camera.DeInit()
-        del camera
-        cam_list.Clear()
-        system.ReleaseInstance()
+        while shared_status["enable_camera"] == True:
+            with CameraInterface() as camera:
+                camera.apply_settings(shared_status["camera_settings"])
+                if shared_status["testing"] == True:
+                    camera.apply_pattern()
+                camera.start()
+
+                while shared_status["begin_imaging"] == True:
+                    data = camera.capture_frame()
+                    output_queue.put(data)
+
+                    shared_status['frame_acquisition'] = 'success'
+
+                camera.stop()
 
 
 def frame_distributor(input_queue, process_queue, save_queue):
@@ -79,7 +53,7 @@ def process_frames(input_queue, centroid_process_queue, centroid_save_queue, pie
 def save_to_disk(input_queue,shared_status):
     while True:
         frame = input_queue.get()
-        cv2.imwrite(f'images/frame_{frame["i"]}.png', frame["frame"])
+        cv2.imwrite(f'images/raw/frame_{frame["timestamp"]}.png', frame["frame"])
 
 
 def serial_comm(centroid_queue,shared_status):
@@ -114,7 +88,7 @@ if __name__ == '__main__':
     piezo_actuation_queue = Queue()
 
     # Start the CSP processes
-    # Process(target=csp_listener, args=(shared_status,)).start()
+    Process(target=csp_listener, args=(shared_status,)).start()
     # Process(target=csp_sender, args=(shared_status,)).start()
 
     # Start the frame acquisition and processing processes
@@ -133,3 +107,7 @@ if __name__ == '__main__':
     Process(target=actuate_piezo, args=(piezo_actuation_queue, shared_status)).start()
 
     acquire_frame_process.join()
+    frame_distributor_process.join()
+    process_frames_process.join()
+    save_frame_process.join()
+    save_centroid_process.join()
