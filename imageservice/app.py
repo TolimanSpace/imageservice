@@ -7,6 +7,7 @@ import cv2
 import serial
 
 # from workers.csp import *
+from workers.images import create_fits
 from workers.processing import *
 from workers.camera import CameraInterface
 from dummy_csp import csp_listener
@@ -53,8 +54,13 @@ def process_frames(input_queue, centroid_process_queue, centroid_save_queue, pie
 def save_to_disk(input_queue,shared_status):
     while True:
         frame = input_queue.get()
-        cv2.imwrite(f'images/raw/frame_{frame["timestamp"]}.png', frame["frame"])
 
+        result = create_fits(frame)
+
+        cv2.imwrite(f'images/raw/frame_{frame["camtime"]}.png', frame["frame"])
+
+        if not result:
+            _logger.error(f"FITS file not created")
 
 def serial_comm(centroid_queue,shared_status):
     ser = serial.Serial('/dev/ttyUSB0', 9600)
