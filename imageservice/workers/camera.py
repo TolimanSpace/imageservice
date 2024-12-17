@@ -1,5 +1,6 @@
 import logging
 import threading
+from datetime import datetime
 
 # from simple_pyspin import Camera
 import PySpin
@@ -83,6 +84,13 @@ class CameraInterface:
     def acquisitionmode(self, value):
         self.cam.AcquisitionMode.SetValue(value)
         
+    @property
+    def pixelformat(self):
+        return self.cam.PixelFormat.GetValue()
+
+    @pixelformat.setter
+    def pixelformat(self,value):
+        self.cam.PixelFormat.SetValue(value)
 
     # ... add more properties as required
 
@@ -160,6 +168,7 @@ class CameraInterface:
         Capture an image
         """
         with self._lock:
+            comptime = str(datetime.now())
             image_result = self.cam.GetNextImage(1000)
 
             if image_result.IsIncomplete():
@@ -174,14 +183,31 @@ class CameraInterface:
             i = image_converted.GetFrameID()
             width = image_converted.GetWidth()
             height = image_converted.GetHeight()
-            timestamp = image_converted.GetTimeStamp()
-            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {timestamp}")
+            camtime = image_converted.GetTimeStamp()
+            pxlfmt = image_converted.GetPixelFormatName()
+            xoff = image_converted.GetXOffset()
+            xpad = image_converted.GetXPadding()
+            yoff = image_converted.GetYOffset()
+            ypad = image_converted.GetYPadding()
+
+            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
             # Get data
             image_data = image_converted.GetNDArray()
 
             # Package data in a dict
-            data = {"i": i, "frame": image_data, "timestamp": timestamp}
+            data = {
+                "i": i,
+                "frame": image_data,
+                "camtime": camtime,
+                "comptime": comptime,
+                "pxlfmt": pxlfmt,
+                "xoff": xoff,
+                "xpad": xpad,
+                "yoff": yoff,
+                "ypad": ypad,
+                "exposure": self.exposure
+                }
 
             return data
 
