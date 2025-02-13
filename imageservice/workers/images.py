@@ -1,5 +1,8 @@
 import logging
+import numpy as np
 from astropy.io import fits
+from processing import find_centroid, find_stars
+from compression import crop_centre, crop_sidelobes
 
 _logger = logging.getLogger(__name__)
 
@@ -31,3 +34,49 @@ def create_fits(frame):
     _logger.info(f"FITS file written to {filename}")
 
     return True
+
+
+def compress(frame):
+
+    centroid_data = find_centroid(frame["frame"])
+    core = crop_centre(frame["frame"], centroid_data["x"], centroid_data["y"])
+    star_poss = find_stars(core)
+    x_poss = np.round(star_poss['xs'] + centroid_data['x'] - core.shape[1]//2)
+    y_poss = np.round(star_poss['ys'] + centroid_data['y'] - core.shape[0]//2)
+    sidelobes = crop_sidelobes(frame["frame"], x_poss, y_poss)
+
+    core_hdu = fits.CompImageHDU(core, name="CORE")
+    sidelobes_hdu = fits.CompImageHDU(sidelobes, name="SIDELOBES")
+
+    # Create primary header
+    header = fits.Header()
+    header['SEQNUM'] = frame["i"]
+    header['CAMTIME'] = frame["camtime"]
+    header['COMTIME'] = frame["comptime"]
+    header["EXPOSURE"] = frame["exposure"]
+    header["PXLFMT"] = frame["pxlfmt"]
+    header["XOFF"] = frame["xoff"]
+    header["YOFF"] = frame["yoff"]
+    header["XPAD"] = frame["xpad"]
+    header["YPAD"] = frame["ypad"]
+    header["CENTR_X"] = np.round(centroid_data['x'])
+    header["CENTR_Y"] = np.round(centroid_data['y'])
+    header["STAR_1_X"] = x_poss[0]
+    header["STAR_1_Y"] = y_poss[0]
+    header["STAR_2_X"] = x_poss[1]
+    header["STAR_2_Y"] = y_poss[1]
+
+
+    primary_hdu = fits.PrimaryHDU(header=header)
+
+    hdul = fits.HDUList([primary_hdu, core_hdu, sidelobes_hdu])
+
+    # Write to disk
+    filename = f'images/compressed/frame_{frame["camtime"]}.fits'
+    hdul.writeto(filename, overwrite=True)
+
+    # Log status
+    _logger.info(f"FITS file written to {filename}")
+
+    return True
+
