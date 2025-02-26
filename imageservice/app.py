@@ -7,9 +7,10 @@ import cv2
 import serial
 
 # from workers.csp import *
-from workers.images import create_fits
+from workers.images import create_fits, compress_image
 from workers.processing import *
 from workers.camera import CameraInterface
+from workers.compression import crop_centre
 from dummy_csp import csp_listener
 
 import PySpin
@@ -51,16 +52,28 @@ def process_frames(input_queue, centroid_process_queue, centroid_save_queue, pie
         piezo_actuation_queue.put(centroid_data)
 
 
-def save_to_disk(input_queue,shared_status):
+def save_to_disk(input_queue, compress_queue, shared_status):
     while True:
         frame = input_queue.get()
 
         result = create_fits(frame)
 
-        cv2.imwrite(f'images/raw/frame_{frame["camtime"]}.png', frame["frame"])
+        compress_queue.put(result)
+
+        # cv2.imwrite(f'images/raw/frame_{frame["camtime"]}.png', frame["frame"])
 
         if not result:
             _logger.error(f"FITS file not created")
+
+def compress(compress_queue,shared_status):
+    while True:
+        image_filename = compress_queue.get()
+
+        result = compress_image(image_filename)
+
+        if not result:
+            _logger.error(f"Error compressing frame ")
+
 
 def serial_comm(centroid_queue,shared_status):
     ser = serial.Serial('/dev/ttyUSB0', 9600)
@@ -92,6 +105,7 @@ if __name__ == '__main__':
     centroid_process_queue = Queue()
     centroid_save_queue = Queue()
     piezo_actuation_queue = Queue()
+    compress_queue = Queue()
 
     # Start the CSP processes
     Process(target=csp_listener, args=(shared_status,)).start()
@@ -105,11 +119,13 @@ if __name__ == '__main__':
     process_frames_process = Process(target=process_frames,
             args=(process_queue, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status))
     process_frames_process.start()
-    save_frame_process = Process(target=save_to_disk, args=(save_queue, shared_status))
+    save_frame_process = Process(target=save_to_disk, args=(save_queue, compress_queue, shared_status))
     save_frame_process.start()
     # Process(target=serial_comm, args=(centroid_process_queue, shared_status)).start()
     save_centroid_process = Process(target=save_centroid, args=(centroid_save_queue, shared_status))
     save_centroid_process.start()
+    compress_process = Process(target = compress, args=(compress_queue, shared_status))
+    compress_process.start()
     Process(target=actuate_piezo, args=(piezo_actuation_queue, shared_status)).start()
 
     acquire_frame_process.join()
@@ -117,3 +133,4 @@ if __name__ == '__main__':
     process_frames_process.join()
     save_frame_process.join()
     save_centroid_process.join()
+    compress_process.join()

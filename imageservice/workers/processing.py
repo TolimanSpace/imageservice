@@ -1,10 +1,11 @@
 import logging
+import os
 import numpy as np
 from scipy.ndimage import center_of_mass, maximum_filter
 from scipy.fft import fft2, ifft2, fftshift
 _logger = logging.getLogger(__name__)
 
-DECONVOLVE_CONSTANT_FILEPATH = "../deconvolution_constant.npy"
+DECONVOLVE_CONSTANT_FILEPATH = "./deconvolution_constant.npy"
 DECONVOLVE_CONSTANT = np.load(DECONVOLVE_CONSTANT_FILEPATH)
 
 def find_centroid(frame):
