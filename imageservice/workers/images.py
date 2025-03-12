@@ -70,7 +70,7 @@ def compress_image(raw_filename):
         hdul = fits.HDUList([primary_hdu, core_hdu, sidelobes_hdu])
 
         # Write to disk
-        filename = f'images/compressed/frame_{header["CAMTIME"]}.fits'
+        filename = f'images/compressed/frame_proc_{header["CAMTIME"]}.fits.gz'
         hdul.writeto(filename, overwrite=True)
 
         # Log status
