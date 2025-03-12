@@ -1,5 +1,7 @@
 import logging
 import threading
+import psutil
+import os
 from datetime import datetime
 
 # from simple_pyspin import Camera
@@ -210,6 +212,65 @@ class CameraInterface:
                 }
 
             return data
+
+    def capture_frames(self, n_frames):
+        """
+        Capture n_images
+        """
+
+        # Get n images
+        # Calculate centroids and push to queue?
+        # Store images and metadata
+        # Return images and metadata in bulk
+
+        results = []
+
+        with self._lock:
+            for frame in range(n_frames):
+                comptime = str(datetime.now())
+                image_result = self.cam.GetNextImage(1000)
+
+                if image_result.IsIncomplete():
+                    _logger.error(f"Image incomplete with status {image_result.GetImageStatus()}")
+                    return None
+
+                # Convert image to correct format and release result
+                image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono8)
+                image_result.Release()
+
+                # Get metadata
+                i = image_converted.GetFrameID()
+                width = image_converted.GetWidth()
+                height = image_converted.GetHeight()
+                camtime = image_converted.GetTimeStamp()
+                pxlfmt = image_converted.GetPixelFormatName()
+                xoff = image_converted.GetXOffset()
+                xpad = image_converted.GetXPadding()
+                yoff = image_converted.GetYOffset()
+                ypad = image_converted.GetYPadding()
+
+                _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
+
+                # Get data
+                image_data = image_converted.GetNDArray()
+
+                # Package data in a dict
+                data = {
+                    "i": i,
+                    "frame": image_data,
+                    "camtime": camtime,
+                    "comptime": comptime,
+                    "pxlfmt": pxlfmt,
+                    "xoff": xoff,
+                    "xpad": xpad,
+                    "yoff": yoff,
+                    "ypad": ypad,
+                    "exposure": self.exposure
+                    }
+
+                results.append(data)
+
+        return results
 
 
 # camera = CameraInterface()
