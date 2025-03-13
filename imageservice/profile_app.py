@@ -14,6 +14,8 @@ timestamp, process, cpu, state = [], [], [], []
 with open(log_file, "r") as file:
     for line in file:
         if 'DEBUG' in line:
+            if "all workers finished" in line:
+                break
             data = line.strip()
             timestamp.append(datetime.strptime(data[:23], '%Y-%m-%d %H:%M:%S,%f'))
             cpu.append(data.split('cpu-')[1].split(':')[0])
@@ -148,7 +150,7 @@ for idx, row in timeline_data_df.iterrows():
     verts.append(v)
     colours.append(colourmapping_cpu[row.cpu])
 
-bars = PolyCollection(verts, facecolors = colours, edgecolors = 'k')
+bars = PolyCollection(verts, facecolors = colours)
 
 fig, ax = plt.subplots(figsize=(15,5))
 ax.add_collection(bars)
@@ -166,3 +168,35 @@ labels = ['CPU ' + label for label in labels]
 plt.legend(handles, labels, loc = 'lower right')
 
 plt.savefig(f"benchmarking/process_timing_{versiontime}.pdf", facecolor='w')
+
+
+verts = []
+colours = []
+for idx, row in timeline_data_df.iterrows():
+    v = [(mdates.date2num(row.timestamp_start), cats[row.process]-0.4),
+         (mdates.date2num(row.timestamp_start), cats[row.process]+0.4),
+         (mdates.date2num(row.timestamp_end), cats[row.process]+0.4),
+         (mdates.date2num(row.timestamp_end), cats[row.process]-0.4),
+         (mdates.date2num(row.timestamp_start), cats[row.process]-0.4)]
+    verts.append(v)
+    colours.append(colourmapping_cpu[row.cpu])
+
+bars = PolyCollection(verts, facecolors = colours, edgecolors = 'k')
+
+fig, ax = plt.subplots(figsize=(15,5))
+ax.add_collection(bars)
+ax.autoscale()
+loc = mdates.MinuteLocator()
+ax.xaxis.set_major_locator(loc)
+ax.xaxis.set_major_formatter(mdates.AutoDateFormatter(loc))
+ax.set_xlim(mdates.date2num(timeline_data_df.timestamp_start.min())-1e-6, mdates.date2num(timeline_data_df.timestamp_start.min()) + 7.5e-4)
+ax.set_yticks([1,2,3,4,5,6,7,8,9])
+ax.set_yticklabels(cats.keys())
+
+# legend
+labels = list(colourmapping_cpu.keys())
+handles = [plt.Rectangle((0,0),1,1, color=colourmapping_cpu[label]) for label in labels]
+labels = ['CPU ' + label for label in labels]
+plt.legend(handles, labels, loc = 'upper left')
+
+plt.savefig(f"benchmarking/process_timing_firstminute_{versiontime}.pdf", facecolor='w')
