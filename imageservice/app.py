@@ -1,6 +1,6 @@
 import copy
 import time
-from multiprocessing import Process, Manager, Queue, Pool
+from multiprocessing import Process, Manager, Queue, Pool, Pipe
 import logging
 import psutil
 
@@ -21,9 +21,10 @@ FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 logging.basicConfig(filename = "process_log.txt", level = logging.DEBUG, format=FORMAT)
 
 DEDICATED_ACQUIRE_FRAMES_CORE = 2
-OTHER_CORES = [c for c in range(psutil.cpu_count()) if c != DEDICATED_ACQUIRE_FRAMES_CORE]
+DEDICATED_FRAME_DISTRIBUTOR_CORE = 3
+OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE,DEDICATED_FRAME_DISTRIBUTOR_CORE]]
 
-def acquire_frames(output_queue, shared_status):
+def acquire_frames(output_pipe, shared_status):
 
     # Set CPU affinity
     p = psutil.Process(os.getpid())
@@ -53,7 +54,7 @@ def acquire_frames(output_queue, shared_status):
                     _logger.warning(f"{data['i'] - previous_image - 1} frame(s) skipped")
                 previous_image = data["i"]
 
-                output_queue.put(data)
+                output_pipe.send(data)
 
                 shared_status['frame_acquisition'] = 'success'
 
@@ -62,20 +63,19 @@ def acquire_frames(output_queue, shared_status):
             camera.stop()
 
         if "close_app" in shared_status and shared_status["close_app"] == True:
-            output_queue.put(None)
-            output_queue.put(None)
+            output_pipe.send(None)
             # _logger.debug(f"cpu-{cpu_num}: stopping acquire_frames worker")
             break
 
-def frame_distributor(input_queue, process_queue, save_queue):
+def frame_distributor(input_pipe, process_pipe, save_queue):
 
      # Set CPU affinity
     p = psutil.Process(os.getpid())
-    p.cpu_affinity(OTHER_CORES)
+    p.cpu_affinity([DEDICATED_FRAME_DISTRIBUTOR_CORE])
     pid = p.pid
 
     while True:
-        frame = input_queue.get()
+        frame = input_pipe.recv()
 
         cpu_num = p.cpu_num()
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start frame_distributor")
@@ -87,24 +87,13 @@ def frame_distributor(input_queue, process_queue, save_queue):
             break
 
         # for frame in data:
-        process_queue.put(copy.deepcopy(frame))
+        process_pipe.send(copy.deepcopy(frame))
         save_queue.put(frame)
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end frame_distributor")
 
-def frame_distributor_manager(input_queue, process_queue, save_queue, max_workers=2):
-    while True:
-        processes = []
-        if len(processes) < max_workers:
-            p = Process(target = frame_distributor, args=(input_queue, process_queue, save_queue))
-            p.start()
-            processes.append(p)
-            _logger.info(f"Spawned frame_distributor worker {len(processes)}")
 
-        for p in processes:
-            p.join()
-
-def process_frames(input_queue, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status):
+def process_frames(input_pipe, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status):
 
     # Set CPU affinity
     p = psutil.Process(os.getpid())
@@ -112,7 +101,7 @@ def process_frames(input_queue, centroid_process_queue, centroid_save_queue, pie
     pid = p.pid
 
     while True:
-        frame = input_queue.get()
+        frame = input_pipe.recv()
 
         cpu_num = p.cpu_num()
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start process_frames")
@@ -282,7 +271,10 @@ if __name__ == '__main__':
     manager = Manager()
     shared_status = manager.dict()
 
-    frame_queue = Queue()
+    frame_parent_conn, frame_child_conn = Pipe()
+    process_parent_conn, process_child_conn = Pipe()
+
+    # frame_queue = Queue()
     process_queue = Queue()
     save_queue = Queue()
     centroid_process_queue = Queue()
@@ -295,16 +287,14 @@ if __name__ == '__main__':
     # Process(target=csp_sender, args=(shared_status,)).start()
 
     # Start the frame acquisition and processing processes
-    acquire_frame_process = Process(target=acquire_frames, args=(frame_queue, shared_status))
+    acquire_frame_process = Process(target=acquire_frames, args=(frame_parent_conn, shared_status))
     acquire_frame_process.start()
 
-    # frame_distributor_process = Process(target=frame_distributor, args=(frame_queue, process_queue, save_queue))
-    # frame_distributor_process.start()
-    frame_distributor_manager_process = Process(target=frame_distributor_manager, args=(frame_queue, process_queue, save_queue))
-    frame_distributor_manager_process.start()
+    frame_distributor_process = Process(target=frame_distributor, args=(frame_child_conn, process_parent_conn, save_queue))
+    frame_distributor_process.start()
 
     process_frames_process = Process(target=process_frames,
-            args=(process_queue, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status))
+            args=(process_child_conn, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status))
     process_frames_process.start()
     save_frame_process = Process(target=save_to_disk, args=(save_queue, compress_queue, shared_status))
     save_frame_process.start()
@@ -328,7 +318,7 @@ if __name__ == '__main__':
 
 
     acquire_frame_process.join()
-    frame_distributor_manager_process.join()
+    frame_distributor_process.join()
     process_frames_process.join()
     save_frame_process.join()
     serial_comm_process.join()
