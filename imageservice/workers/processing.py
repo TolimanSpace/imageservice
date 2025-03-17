@@ -4,6 +4,7 @@ import numpy as np
 from scipy.ndimage import center_of_mass, maximum_filter
 from scipy.fft import fft2, ifft2, fftshift
 from datetime import datetime
+from workers.compression import crop_centre
 _logger = logging.getLogger(__name__)
 
 DECONVOLVE_CONSTANT_FILEPATH = "./deconvolution_constant.npy"
@@ -11,7 +12,9 @@ DECONVOLVE_CONSTANT = np.load(DECONVOLVE_CONSTANT_FILEPATH)
 
 def find_centroid(frame):
     t = str(datetime.now())
-    y, x = center_of_mass(frame)
+    y, x = center_of_mass(crop_centre(frame, frame.shape[1]/2, frame.shape[0]/2))
+    y = y + 1760
+    x = x + 2670
     return {"x": x, "y": y, "t": t}
 
 def deconvolve_image(image):
