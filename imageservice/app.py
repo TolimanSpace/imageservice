@@ -8,7 +8,7 @@ import cv2
 import serial
 
 # from workers.csp import *
-from workers.images import create_fits, compress_image
+from workers.images import create_fits, compress_image, dump_data, compress_dump
 from workers.processing import *
 from workers.camera import CameraInterface
 from workers.compression import crop_centre
@@ -42,10 +42,17 @@ def acquire_frames(output_queue, shared_status):
 
             _logger.debug(f"cpu-{cpu_num}: end acquire_frames_setup")
 
+            previous_image = -1
+
             while shared_status["begin_imaging"] == True:
                 _logger.debug(f"process {pid} cpu-{cpu_num}: start acquire_frames")
 
                 data = camera.capture_frame()
+
+                if data["i"] - previous_image > 1:
+                    _logger.warning(f"{data['i'] - previous_image - 1} frame(s) skipped")
+                previous_image = data["i"]
+
                 output_queue.put(data)
 
                 shared_status['frame_acquisition'] = 'success'
@@ -55,6 +62,7 @@ def acquire_frames(output_queue, shared_status):
             camera.stop()
 
         if "close_app" in shared_status and shared_status["close_app"] == True:
+            output_queue.put(None)
             output_queue.put(None)
             # _logger.debug(f"cpu-{cpu_num}: stopping acquire_frames worker")
             break
@@ -84,6 +92,17 @@ def frame_distributor(input_queue, process_queue, save_queue):
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end frame_distributor")
 
+def frame_distributor_manager(input_queue, process_queue, save_queue, max_workers=2):
+    while True:
+        processes = []
+        if len(processes) < max_workers:
+            p = Process(target = frame_distributor, args=(input_queue, process_queue, save_queue))
+            p.start()
+            processes.append(p)
+            _logger.info(f"Spawned frame_distributor worker {len(processes)}")
+
+        for p in processes:
+            p.join()
 
 def process_frames(input_queue, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status):
 
@@ -131,7 +150,9 @@ def save_to_disk(input_queue, compress_queue, shared_status):
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping save_to_disk worker")
             break
 
-        result = create_fits(frame)
+        # result = create_fits(frame)
+        result = dump_data(frame)
+
         compress_queue.put(result)
         # cv2.imwrite(f'images/raw/frame_{frame["camtime"]}.png', frame["frame"])
         if not result:
@@ -157,7 +178,8 @@ def compress(compress_queue,shared_status):
                 _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping compress worker")
                 shared_status["end_compression"] = True
                 shared_status["begin_compression"] = False
-            result = compress_image(image_filename)
+            # result = compress_image(image_filename)
+            result = compress_dump(image_filename)
 
             if not result:
                 _logger.error(f"Error compressing frame ")
@@ -168,7 +190,7 @@ def compress(compress_queue,shared_status):
             break
 
 
-def compress_manager(compress_queue, shared_status, max_workers=3):
+def compress_manager(compress_queue, shared_status, max_workers=4):
     while True:
         processes = []
         while shared_status["begin_compression"] == True:
@@ -275,8 +297,12 @@ if __name__ == '__main__':
     # Start the frame acquisition and processing processes
     acquire_frame_process = Process(target=acquire_frames, args=(frame_queue, shared_status))
     acquire_frame_process.start()
-    frame_distributor_process = Process(target=frame_distributor, args=(frame_queue, process_queue, save_queue))
-    frame_distributor_process.start()
+
+    # frame_distributor_process = Process(target=frame_distributor, args=(frame_queue, process_queue, save_queue))
+    # frame_distributor_process.start()
+    frame_distributor_manager_process = Process(target=frame_distributor_manager, args=(frame_queue, process_queue, save_queue))
+    frame_distributor_manager_process.start()
+
     process_frames_process = Process(target=process_frames,
             args=(process_queue, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status))
     process_frames_process.start()
@@ -302,7 +328,7 @@ if __name__ == '__main__':
 
 
     acquire_frame_process.join()
-    frame_distributor_process.join()
+    frame_distributor_manager_process.join()
     process_frames_process.join()
     save_frame_process.join()
     serial_comm_process.join()
