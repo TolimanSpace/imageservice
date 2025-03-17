@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-image_path = "/home/toliman-dev/toliman/imageservice/imageservice/images/raw/"
+image_path = "/home/toliman-dev/toliman/imageservice/imageservice/images/compressed/"
 image_files = os.listdir(image_path)
 
 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -18,8 +18,8 @@ camtimes = []
 for file in image_files:
     if file.split('.')[1] == 'fits':
         with fits.open(os.path.join(image_path, file)) as hdul:
-            comtime = datetime.strptime(hdul[1].header['COMTIME'], '%Y-%m-%d %H:%M:%S.%f')
-            camtime = int(hdul[1].header['CAMTIME'])
+            comtime = datetime.strptime(hdul[0].header['COMTIME'], '%Y-%m-%d %H:%M:%S.%f')
+            camtime = int(hdul[0].header['CAMTIME'])
 
             comtimes.append(comtime)
             camtimes.append(camtime)
