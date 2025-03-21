@@ -4,7 +4,6 @@ from multiprocessing import Process, Manager, Queue, Pool, Pipe
 import logging
 import psutil
 
-import cv2
 import serial
 
 # from workers.csp import *
@@ -14,15 +13,18 @@ from workers.camera import CameraInterface
 from workers.compression import crop_centre
 from dummy_csp import csp_listener
 
-import PySpin
 
 _logger = logging.getLogger(__name__)
 FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 logging.basicConfig(filename = "process_log.txt", level = logging.DEBUG, format=FORMAT)
 
 DEDICATED_ACQUIRE_FRAMES_CORE = 2
-DEDICATED_FRAME_DISTRIBUTOR_CORE = 3
-OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE,DEDICATED_FRAME_DISTRIBUTOR_CORE]]
+# DEDICATED_SAVE_FRAMES_CORE = 3
+# DEDICATED_SAVE_FRAMES_CORE_2 = 4
+# DEDICATED_FRAME_DISTRIBUTOR_CORE = 4
+OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE]]
+# OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE, DEDICATED_SAVE_FRAMES_CORE, DEDICATED_FRAME_DISTRIBUTOR_CORE]]
+# OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE,DEDICATED_FRAME_DISTRIBUTOR_CORE]]
 
 def acquire_frames(output_pipe, shared_status):
 
@@ -67,11 +69,12 @@ def acquire_frames(output_pipe, shared_status):
             # _logger.debug(f"cpu-{cpu_num}: stopping acquire_frames worker")
             break
 
-def frame_distributor(input_pipe, process_pipe, save_queue):
+def frame_distributor(input_pipe, process_pipe, save_pipe):
 
      # Set CPU affinity
     p = psutil.Process(os.getpid())
-    p.cpu_affinity([DEDICATED_FRAME_DISTRIBUTOR_CORE])
+    # p.cpu_affinity([DEDICATED_FRAME_DISTRIBUTOR_CORE])
+    p.cpu_affinity(OTHER_CORES)
     pid = p.pid
 
     while True:
@@ -81,14 +84,15 @@ def frame_distributor(input_pipe, process_pipe, save_queue):
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start frame_distributor")
 
         if frame is None:
-            process_queue.put(None)
-            save_queue.put(None)
+            process_pipe.send(None)
+            save_pipe.send(None)
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping frame_distributor worker")
             break
 
         # for frame in data:
-        process_pipe.send(copy.deepcopy(frame))
-        save_queue.put(frame)
+        # frame_centre = crop_centre(frame['frame'], frame['frame'].shape[1]/2, frame['frame'].shape[0]/2)
+        process_pipe.send(frame)
+        save_pipe.send(frame)
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end frame_distributor")
 
@@ -113,7 +117,10 @@ def process_frames(input_pipe, centroid_process_queue, centroid_save_queue, piez
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping process_frames worker")
             break
 
-        centroid_data = find_centroid(frame["frame"])
+        image = np.load(frame["rawfile"])
+        image_centre = crop_centre(image, image.shape[1]/2, image.shape[0]/2)
+
+        centroid_data = find_centroid(image_centre)
         centroid_process_queue.put(copy.deepcopy(centroid_data))
         centroid_save_queue.put(copy.deepcopy(centroid_data))
         piezo_actuation_queue.put(centroid_data)
@@ -121,15 +128,16 @@ def process_frames(input_pipe, centroid_process_queue, centroid_save_queue, piez
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end process_frames")
 
 
-def save_to_disk(input_queue, compress_queue, shared_status):
+def save_to_disk(input_pipe, compress_queue, shared_status):
 
     # Set CPU affinity
     p = psutil.Process(os.getpid())
+    # p.cpu_affinity([DEDICATED_SAVE_FRAMES_CORE])
     p.cpu_affinity(OTHER_CORES)
     pid = p.pid
 
     while True:
-        frame = input_queue.get()
+        frame = input_pipe.recv()
 
         cpu_num = p.cpu_num()
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start save_to_disk")
@@ -149,6 +157,29 @@ def save_to_disk(input_queue, compress_queue, shared_status):
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end save_to_disk")
 
+def save_manager(input_queue, compress_queue, shared_status, max_workers=2):
+    while True:
+        processes = []
+        time.sleep(1)
+        while shared_status["begin_imaging"] == True:
+            if len(processes) < max_workers:
+                p = Process(target = save_to_disk, args=(input_queue, compress_queue, shared_status))
+                p.start()
+                processes.append(p)
+                _logger.info(f"Spawned save_to_disk worker {len(processes)}")
+
+            time.sleep(1)
+
+        if input_queue.empty():
+            for _ in processes[1:]:
+                input_queue.put(None)
+
+            for p in processes:
+                p.join()
+
+            _logger.info(f"Stopping save_manager")
+            break
+
 def compress(compress_queue,shared_status):
 
     # Set CPU affinity
@@ -164,10 +195,12 @@ def compress(compress_queue,shared_status):
             _logger.debug(f"process {pid} on cpu-{cpu_num}: start compress")
 
             if image_filename is None:
-                _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping compress worker")
+                _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping compress werker")
                 shared_status["end_compression"] = True
                 shared_status["begin_compression"] = False
+                break
             # result = compress_image(image_filename)
+
             result = compress_dump(image_filename)
 
             if not result:
@@ -176,6 +209,7 @@ def compress(compress_queue,shared_status):
             _logger.debug(f"process {pid} on cpu-{cpu_num}: end compress")
 
         if "end_compression" in shared_status and shared_status["end_compression"] == True:
+            _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping compress worker")
             break
 
 
@@ -197,6 +231,9 @@ def compress_manager(compress_queue, shared_status, max_workers=4):
 
             for p in processes:
                 p.join()
+
+            _logger.info(f"Stopping compress_manager")
+            break
 
 
 def serial_comm(centroid_queue,shared_status):
@@ -273,10 +310,11 @@ if __name__ == '__main__':
 
     frame_parent_conn, frame_child_conn = Pipe()
     process_parent_conn, process_child_conn = Pipe()
+    save_parent_conn, save_child_conn = Pipe()
 
     # frame_queue = Queue()
-    process_queue = Queue()
-    save_queue = Queue()
+    # process_queue = Queue()
+    # save_queue = Queue()
     centroid_process_queue = Queue()
     centroid_save_queue = Queue()
     piezo_actuation_queue = Queue()
@@ -290,20 +328,26 @@ if __name__ == '__main__':
     acquire_frame_process = Process(target=acquire_frames, args=(frame_parent_conn, shared_status))
     acquire_frame_process.start()
 
-    frame_distributor_process = Process(target=frame_distributor, args=(frame_child_conn, process_parent_conn, save_queue))
+    frame_distributor_process = Process(target=frame_distributor, args=(frame_child_conn, process_parent_conn, save_parent_conn))
     frame_distributor_process.start()
 
     process_frames_process = Process(target=process_frames,
             args=(process_child_conn, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status))
     process_frames_process.start()
-    save_frame_process = Process(target=save_to_disk, args=(save_queue, compress_queue, shared_status))
+    
+    save_frame_process = Process(target=save_to_disk, args=(save_child_conn, compress_queue, shared_status))
     save_frame_process.start()
+    
+    # save_manager_process = Process(target=save_manager, args=(save_queue, compress_queue, shared_status))
+    # save_manager_process.start()
+
     serial_comm_process = Process(target=serial_comm, args=(centroid_process_queue, shared_status))
     serial_comm_process.start()
     save_centroid_process = Process(target=save_centroid, args=(centroid_save_queue, shared_status))
     save_centroid_process.start()
     piezo_process = Process(target=actuate_piezo, args=(piezo_actuation_queue, shared_status))
     piezo_process.start()
+
     compress_manager_process = Process(target = compress_manager, args=(compress_queue, shared_status))
     compress_manager_process.start()
  
@@ -321,6 +365,7 @@ if __name__ == '__main__':
     frame_distributor_process.join()
     process_frames_process.join()
     save_frame_process.join()
+    # save_manager_process.join()
     serial_comm_process.join()
     save_centroid_process.join()
     piezo_process.join()
