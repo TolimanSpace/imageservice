@@ -97,9 +97,10 @@ def dump_data(frame):
     with open(metadata_filename, 'a') as file:
             file.write(f"{metadata_dict}")
 
-    imageData = frame["frame"]
-    filename = f'images/raw/frame_{frame["camtime"]}.npy'
-    np.save(filename, imageData)
+    # imageData = frame["frame"]
+    # filename = f'images/raw/frame_{frame["camtime"]}.npy'
+    # np.save(filename, imageData)
+    filename = frame["rawfile"]
 
     return filename
 
