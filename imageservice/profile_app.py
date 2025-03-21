@@ -11,6 +11,8 @@ versiontime = datetime.now().strftime('%Y%m%d-%H%M%S')
 
 timestamp, process, cpu, state = [], [], [], []
 
+skipped_frames = 0
+
 with open(log_file, "r") as file:
     for line in file:
         if 'DEBUG' in line:
@@ -28,6 +30,11 @@ with open(log_file, "r") as file:
                 state.append(0)
             else:
                 state.append(np.nan)
+        elif 'WARNING' in line:
+            data = line.strip()
+            skipped_frames = skipped_frames + int(data.split()[5])
+
+print(f"Total skipped frames: {skipped_frames}")
                 
 d = {'timestamp': timestamp, 'process': process, 'cpu': cpu, 'state': state}
 df = pd.DataFrame(data = d)
