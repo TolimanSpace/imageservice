@@ -12,9 +12,7 @@ DECONVOLVE_CONSTANT = np.load(DECONVOLVE_CONSTANT_FILEPATH)
 
 def find_centroid(frame):
     t = str(datetime.now())
-    y, x = center_of_mass(crop_centre(frame, frame.shape[1]/2, frame.shape[0]/2))
-    y = y + 1760
-    x = x + 2670
+    y, x = center_of_mass(frame)
     return {"x": x, "y": y, "t": t}
 
 def deconvolve_image(image):
