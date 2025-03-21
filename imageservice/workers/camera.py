@@ -3,6 +3,7 @@ import threading
 import psutil
 import os
 from datetime import datetime
+import numpy as np
 
 # from simple_pyspin import Camera
 import PySpin
@@ -178,8 +179,11 @@ class CameraInterface:
                 return None
             
             # Convert image to correct format and release result
-            image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono8)
+            image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono16)
             image_result.Release()
+
+            # Right shift to get 12 bit
+            image_data = image_converted.GetNDArray() >> 4
 
             # Get metadata
             i = image_converted.GetFrameID()
@@ -194,13 +198,14 @@ class CameraInterface:
 
             _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
-            # Get data
-            image_data = image_converted.GetNDArray()
+            # Dump data
+            filename = f'images/raw/frame_{camtime}.npy'
+            np.save(filename, image_data)
 
             # Package data in a dict
             data = {
                 "i": i,
-                "frame": image_data,
+                "rawfile": filename,
                 "camtime": camtime,
                 "comptime": comptime,
                 "pxlfmt": pxlfmt,
@@ -235,8 +240,11 @@ class CameraInterface:
                     return None
 
                 # Convert image to correct format and release result
-                image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono8)
+                image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono16)
                 image_result.Release()
+
+                # Right shift to get 12 bit
+                image_data = image_converted.GetNDArray() >> 4
 
                 # Get metadata
                 i = image_converted.GetFrameID()
