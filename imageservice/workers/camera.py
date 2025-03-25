@@ -172,20 +172,35 @@ class CameraInterface:
         """
         with self._lock:
             comptime = str(datetime.now())
+            time_00 = datetime.now()
             image_result = self.cam.GetNextImage(1000)
+            time_1 = datetime.now()
+            delta_GetNextImage = time_1 - time_00
+
+            print(f"GetNextImage time taken: {delta_GetNextImage}")
 
             if image_result.IsIncomplete():
                 _logger.error(f"Image incomplete with status {image_result.GetImageStatus()}")
                 return None
             
+            time_0 = datetime.now()
             # Convert image to correct format and release result
             image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono16)
+            time_1 = datetime.now()
+            delta_Convert = time_1 - time_0
+            print(f"Convert time taken: {delta_Convert}")
+
             image_result.Release()
 
+            time_0 = datetime.now()
             # Right shift to get 12 bit
-            image_data = image_converted.GetNDArray() >> 4
+            image_data = image_converted.GetNDArray() # >> 4
+            time_1 = datetime.now()
+            delta_GetNDArray = time_1 - time_0
+            print(f"GetNDArray, bit shift time taken: {delta_GetNDArray}")
 
             # Get metadata
+            time_0 = datetime.now()
             i = image_converted.GetFrameID()
             width = image_converted.GetWidth()
             height = image_converted.GetHeight()
@@ -196,11 +211,7 @@ class CameraInterface:
             yoff = image_converted.GetYOffset()
             ypad = image_converted.GetYPadding()
 
-            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
-
-            # Dump data
             filename = f'images/raw/frame_{camtime}.npy'
-            np.save(filename, image_data)
 
             # Package data in a dict
             data = {
@@ -215,8 +226,33 @@ class CameraInterface:
                 "ypad": ypad,
                 "exposure": self.exposure
                 }
+            time_1 = datetime.now()
+            delta_metadata = time_1 - time_0
+            print(f"metadata time taken: {delta_metadata}")
+            
+            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
-            return data
+            time_0 = datetime.now()
+            # Dump data
+            np.save(filename, image_data)
+            time_11 = datetime.now()
+            delta_save = time_11 - time_0
+            print(f"Save time taken: {delta_save}")
+
+            delta_total = time_11 - time_00
+            print(f"Total time taken: {delta_total}")
+
+            timing = {
+                "GetNextImage": delta_GetNextImage,
+                "Convert": delta_Convert,
+                "GetNDArray": delta_GetNDArray,
+                "metadata": delta_metadata,
+                "save": delta_save,
+                "total": delta_total,
+            }
+
+
+            return data, timing
 
     def capture_frames(self, n_frames):
         """
