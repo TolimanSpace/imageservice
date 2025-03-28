@@ -50,7 +50,7 @@ class CameraInterface:
 
         self.processor = PySpin.ImageProcessor()
         # Might need to move this next line to a property that can be varied
-        self.processor.SetColorProcessing(PySpin.SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR)
+        self.processor.SetColorProcessing(PySpin.SPINNAKER_COLOR_PROCESSING_ALGORITHM_NONE)
         
 
     @property
@@ -94,6 +94,23 @@ class CameraInterface:
     @pixelformat.setter
     def pixelformat(self,value):
         self.cam.PixelFormat.SetValue(value)
+
+    @property
+    def buffercount(self):
+        return self.cam.TLStream.StreamBufferCountManual.GetValue()
+    
+    @buffercount.setter
+    def buffercount(self,value):
+        self.cam.TLStream.StreamBufferCountMode.SetValue(PySpin.StreamBufferCountMode_Manual)
+        self.cam.TLStream.StreamBufferCountManual.SetValue(value)
+
+    @property
+    def bufferhandlingmode(self):
+        return self.cam.TLStream.StreamBufferHandlingMode.GetValue()
+    
+    @bufferhandlingmode.setter
+    def bufferhandlingmode(self,value):
+        self.cam.TLStream.StreamBufferHandlingMode.SetValue(value)
 
     # ... add more properties as required
 
@@ -172,38 +189,22 @@ class CameraInterface:
         """
         with self._lock:
             comptime = str(datetime.now())
-            time_00 = datetime.now()
             image_result = self.cam.GetNextImage(1000)
-            time_1 = datetime.now()
-            delta_GetNextImage = time_1 - time_00
-
-            print(f"GetNextImage time taken: {delta_GetNextImage}")
 
             if image_result.IsIncomplete():
                 _logger.error(f"Image incomplete with status {image_result.GetImageStatus()}")
                 return None
             
-            time_0 = datetime.now()
-            # Convert image to correct format and release result
+            # Right shift to get 12 bit
             image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono16)
-            time_1 = datetime.now()
-            delta_Convert = time_1 - time_0
-            print(f"Convert time taken: {delta_Convert}")
+            image_data = image_converted.GetNDArray() # >> 4
 
             image_result.Release()
 
-            time_0 = datetime.now()
-            # Right shift to get 12 bit
-            image_data = image_converted.GetNDArray() # >> 4
-            time_1 = datetime.now()
-            delta_GetNDArray = time_1 - time_0
-            print(f"GetNDArray, bit shift time taken: {delta_GetNDArray}")
-
             # Get metadata
-            time_0 = datetime.now()
             i = image_converted.GetFrameID()
-            width = image_converted.GetWidth()
-            height = image_converted.GetHeight()
+            # width = image_converted.GetWidth()
+            # height = image_converted.GetHeight()
             camtime = image_converted.GetTimeStamp()
             pxlfmt = image_converted.GetPixelFormatName()
             xoff = image_converted.GetXOffset()
@@ -224,35 +225,17 @@ class CameraInterface:
                 "xpad": xpad,
                 "yoff": yoff,
                 "ypad": ypad,
-                "exposure": self.exposure
+                # "exposure": self.exposure
                 }
-            time_1 = datetime.now()
-            delta_metadata = time_1 - time_0
-            print(f"metadata time taken: {delta_metadata}")
             
-            _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
+            # _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
-            time_0 = datetime.now()
             # Dump data
-            np.save(filename, image_data)
-            time_11 = datetime.now()
-            delta_save = time_11 - time_0
-            print(f"Save time taken: {delta_save}")
+            # image_result.Save(filename)
+            # image_data.tofile(filename)
+            # np.save(filename, image_data)
 
-            delta_total = time_11 - time_00
-            print(f"Total time taken: {delta_total}")
-
-            timing = {
-                "GetNextImage": delta_GetNextImage,
-                "Convert": delta_Convert,
-                "GetNDArray": delta_GetNDArray,
-                "metadata": delta_metadata,
-                "save": delta_save,
-                "total": delta_total,
-            }
-
-
-            return data, timing
+            return data, image_data
 
     def capture_frames(self, n_frames):
         """

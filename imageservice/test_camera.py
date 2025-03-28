@@ -1,15 +1,23 @@
+import cProfile
 import logging
 import numpy as np
 import PySpin
+import time
 from workers.camera import CameraInterface
+from datetime import datetime
+import os
 
 logging.basicConfig(level=logging.DEBUG)
+
+# os.nice(-10)
 
 camera_settings = {
         'acquisitionmode': PySpin.AcquisitionMode_Continuous,
         'exposure': 50,
+        'pixelformat': PySpin.PixelFormat_Mono12p,
         'framerate': 10,
-        'pixelformat': PySpin.PixelFormat_Mono12Packed
+        'buffercount': 10,
+        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestOnly
         # 'pixelformat': PySpin.PixelFormat_Mono8
     }
 
@@ -22,38 +30,27 @@ camera_settings = {
 #     data = cam.capture_frame()
 #     cam.stop()
 
-GetNextImage = []
-Convert = []
-GetNDArray = []
-metadata = []
-save = []
-total = []
+# total = []
 
-with CameraInterface() as cam:
-    cam.apply_settings(camera_settings)
+with cProfile.Profile() as pr:
+    with CameraInterface() as cam:
+        cam.apply_settings(camera_settings)
 
-    cam.start()
-    for n in range(300):
-        data, timing = cam.capture_frame()
-        GetNextImage.append(timing["GetNextImage"])
-        Convert.append(timing["Convert"])
-        GetNDArray.append(timing["GetNDArray"])
-        metadata.append(timing["metadata"])
-        save.append(timing["save"])
-        total.append(timing["total"])
-    cam.stop()
+        # time.sleep(3)
+        cam.start()
 
-print("---")
-print(f"GetNextImage median time: {np.median(GetNextImage)} + {np.percentile(GetNextImage, 84) - np.percentile(GetNextImage, 50)} - {np.percentile(GetNextImage, 50) - np.percentile(GetNextImage, 16)} ")
-print("---")
-print(f"Convert median time: {np.median(Convert)} + {np.percentile(Convert, 84) - np.percentile(Convert, 50)} - {np.percentile(Convert, 50) - np.percentile(Convert, 16)}")
-print("---")
-print(f"GetNDArray median time: {np.median(GetNDArray)} + {np.percentile(GetNDArray, 84) - np.percentile(GetNDArray, 50)} - {np.percentile(GetNDArray, 50) - np.percentile(GetNDArray, 16)}")
-print("---")
-print(f"metadata median time: {np.median(metadata)} + {np.percentile(metadata, 84) - np.percentile(metadata, 50)} - {np.percentile(metadata, 50) - np.percentile(metadata, 16)}")
-print("---")
-print(f"save median time: {np.median(save)} + {np.percentile(save, 84) - np.percentile(save, 50)} - {np.percentile(save, 50) - np.percentile(save, 16)}")
-print("---")
-print(f"total median time: {np.median(total)} + {np.percentile(total, 84) - np.percentile(total, 50)} - {np.percentile(total, 50) - np.percentile(total, 16)}")
-print("---")
+        for n in range(100):
+            data, frame = cam.capture_frame()
+            # filename = data["rawfile"]
+            # np.save(filename, frame, allow_pickle=False)
+
+        cam.stop()
+
+    pr.print_stats()
+
+print(f"Last frame: {data['i']}")
+
+# print("---")
+# print(f"total median time: {np.median(total)} + {np.percentile(total, 84) - np.percentile(total, 50)} - {np.percentile(total, 50) - np.percentile(total, 16)}")
+# print("---")
 
