@@ -112,6 +112,41 @@ class CameraInterface:
     def bufferhandlingmode(self,value):
         self.cam.TLStream.StreamBufferHandlingMode.SetValue(value)
 
+
+    # Need to think about how these interact with minimum, maximum and increment values
+    @property
+    def offsetx(self):
+        return self.cam.OffsetX.GetValue()
+    
+    @offsetx.setter
+    def offsetx(self,value):
+        self.cam.OffsetX.SetValue(value)
+
+    @property
+    def offsety(self):
+        return self.cam.OffsetY.GetValue()
+    
+    @offsetx.setter
+    def offsety(self,value):
+        self.cam.OffsetY.SetValue(value)
+
+    @property
+    def width(self):
+        return self.cam.Width.GetValue()
+    
+    @width.setter
+    def width(self,value):
+        self.cam.Width.SetValue(value)
+    
+    @property
+    def height(self):
+        return self.cam.Height.GetValue()
+    
+    @height.setter
+    def height(self,value):
+        self.cam.Height.SetValue(value)
+
+
     # ... add more properties as required
 
     def init(self):
