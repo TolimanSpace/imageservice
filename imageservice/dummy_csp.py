@@ -11,8 +11,11 @@ def csp_listener(shared_status):
     camera_settings = {
         'acquisitionmode': PySpin.AcquisitionMode_Continuous,
         'exposure': 50,
+        'pixelformat': PySpin.PixelFormat_Mono12p,
         'framerate': 10,
-        'pixelformat': PySpin.PixelFormat_Mono12Packed
+        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestOnly,
+        'width': 3648,
+        'offsetx': 912,
     }
     shared_status["camera_settings"] = camera_settings
     shared_status["testing"] = True
