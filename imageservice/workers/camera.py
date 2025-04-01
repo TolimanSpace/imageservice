@@ -112,22 +112,50 @@ class CameraInterface:
     def bufferhandlingmode(self,value):
         self.cam.TLStream.StreamBufferHandlingMode.SetValue(value)
 
-
-    # Need to think about how these interact with minimum, maximum and increment values
     @property
     def offsetx(self):
         return self.cam.OffsetX.GetValue()
     
     @offsetx.setter
     def offsetx(self,value):
+        inc = self.cam.OffsetX.GetInc()
+        minval = self.cam.OffsetX.GetMin()
+        maxval = self.cam.OffsetX.GetMax()
+        if value < minval:
+            _logger.warning(f"Value = {value} must be equal or greater than Min = {minval}")
+            value = minval
+            _logger.warning(f"Setting OffsetX to Value = {value} instead")
+        if value > maxval:
+            _logger.warning(f"Value = {value} must be equal or smaller than Max = {maxval}")
+            value = maxval
+            _logger.warning(f"Setting OffsetX to Value = {value} instead")
+        if (value-minval) % inc != 0:
+            _logger.warning(f"The difference between Value = {value} and Min = {minval} must be dividable without rest by Inc = {inc}")
+            value = min(value + ((value-minval) % inc), maxval)
+            _logger.warning(f"Setting OffsetX to Value = {value} instead")
         self.cam.OffsetX.SetValue(value)
 
     @property
     def offsety(self):
         return self.cam.OffsetY.GetValue()
     
-    @offsetx.setter
+    @offsety.setter
     def offsety(self,value):
+        inc = self.cam.OffsetY.GetInc()
+        minval = self.cam.OffsetY.GetMin()
+        maxval = self.cam.OffsetY.GetMax()
+        if value < minval:
+            _logger.warning(f"Value = {value} must be equal or greater than Min = {minval}")
+            value = minval
+            _logger.warning(f"Setting OffsetY to Value = {value} instead")
+        if value > maxval:
+            _logger.warning(f"Value = {value} must be equal or smaller than Max = {maxval}")
+            value = maxval
+            _logger.warning(f"Setting OffsetY to Value = {value} instead")
+        if (value-minval) % inc != 0:
+            _logger.warning(f"The difference between Value = {value} and Min = {minval} must be dividable without rest by Inc = {inc}")
+            value = min(value + ((value-minval) % inc), maxval)
+            _logger.warning(f"Setting OffsetY to Value = {value} instead")
         self.cam.OffsetY.SetValue(value)
 
     @property
@@ -136,6 +164,21 @@ class CameraInterface:
     
     @width.setter
     def width(self,value):
+        inc = self.cam.Width.GetInc()
+        minval = self.cam.Width.GetMin()
+        maxval = self.cam.Width.GetMax()
+        if value < minval:
+            _logger.warning(f"Value = {value} must be equal or greater than Min = {minval}")
+            value = minval
+            _logger.warning(f"Setting Width to Value = {value} instead")
+        if value > maxval:
+            _logger.warning(f"Value = {value} must be equal or smaller than Max = {maxval}")
+            value = maxval
+            _logger.warning(f"Setting Width to Value = {value} instead")
+        if (value-minval) % inc != 0:
+            _logger.warning(f"The difference between Value = {value} and Min = {minval} must be dividable without rest by Inc = {inc}")
+            value = min(value + ((value-minval) % inc), maxval)
+            _logger.warning(f"Setting Width to Value = {value} instead")
         self.cam.Width.SetValue(value)
     
     @property
@@ -144,6 +187,21 @@ class CameraInterface:
     
     @height.setter
     def height(self,value):
+        inc = self.cam.Height.GetInc()
+        minval = self.cam.Height.GetMin()
+        maxval = self.cam.Height.GetMax()
+        if value < minval:
+            _logger.warning(f"Value = {value} must be equal or greater than Min = {minval}")
+            value = minval
+            _logger.warning(f"Setting Height to Value = {value} instead")
+        if value > maxval:
+            _logger.warning(f"Value = {value} must be equal or smaller than Max = {maxval}")
+            value = maxval
+            _logger.warning(f"Setting Height to Value = {value} instead")
+        if (value-minval) % inc != 0:
+            _logger.warning(f"The difference between Value = {value} and Min = {minval} must be dividable without rest by Inc = {inc}")
+            value = min(value + ((value-minval) % inc), maxval)
+            _logger.warning(f"Setting Height to Value = {value} instead")
         self.cam.Height.SetValue(value)
 
 
@@ -232,7 +290,7 @@ class CameraInterface:
             
             # Right shift to get 12 bit
             image_converted = self.processor.Convert(image_result, PySpin.PixelFormat_Mono16)
-            image_data = image_converted.GetNDArray() # >> 4
+            image_data = image_converted.GetNDArray() >> 4
 
             image_result.Release()
 
@@ -260,7 +318,7 @@ class CameraInterface:
                 "xpad": xpad,
                 "yoff": yoff,
                 "ypad": ypad,
-                # "exposure": self.exposure
+                "exposure": self.exposure
                 }
             
             # _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
