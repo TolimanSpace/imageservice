@@ -1,6 +1,7 @@
 import copy
 import time
 from multiprocessing import Process, Manager, Queue, Pool, Pipe
+import multiprocessing.shared_memory as shm
 import logging
 import psutil
 
@@ -21,18 +22,29 @@ logging.basicConfig(filename = "process_log.txt", level = logging.DEBUG, format=
 DEDICATED_ACQUIRE_FRAMES_CORE = 2
 # DEDICATED_SAVE_FRAMES_CORE = 3
 # DEDICATED_SAVE_FRAMES_CORE_2 = 4
-# DEDICATED_FRAME_DISTRIBUTOR_CORE = 4
-OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE]]
+DEDICATED_FRAME_DISTRIBUTOR_CORE = 4
+OTHER_CORES = [c for c in range(psutil.cpu_count())]
+# OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE]]
 # OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE, DEDICATED_SAVE_FRAMES_CORE, DEDICATED_FRAME_DISTRIBUTOR_CORE]]
-# OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE,DEDICATED_FRAME_DISTRIBUTOR_CORE]]
+OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE,DEDICATED_FRAME_DISTRIBUTOR_CORE]]
 
-def acquire_frames(output_pipe, shared_status):
+FFI_SHAPE = (3648, 3648)
+FFI_DTYPE = np.uint16
+
+def acquire_frames(output_pipe, shared_mem_name, shared_id_name, shared_status):
 
     # Set CPU affinity
     p = psutil.Process(os.getpid())
     p.cpu_affinity([DEDICATED_ACQUIRE_FRAMES_CORE])
+    # p.cpu_affinity(OTHER_CORES)
     pid = p.pid
     cpu_num = p.cpu_num()
+
+    shared_mem = shm.SharedMemory(name=shared_mem_name)
+    shared_array = np.ndarray(FFI_SHAPE, dtype=FFI_DTYPE, buffer=shared_mem.buf)
+
+    id_mem = shm.SharedMemory(name=shared_id_name)
+    image_id = np.ndarray((), dtype=np.int64, buffer=id_mem.buf)
 
     while True:
         with CameraInterface() as camera:
@@ -50,11 +62,14 @@ def acquire_frames(output_pipe, shared_status):
             while shared_status["begin_imaging"] == True:
                 _logger.debug(f"process {pid} cpu-{cpu_num}: start acquire_frames")
 
-                data = camera.capture_frame()
+                data, frame = camera.capture_frame()
 
                 if data["i"] - previous_image > 1:
                     _logger.warning(f"{data['i'] - previous_image - 1} frame(s) skipped")
                 previous_image = data["i"]
+
+                shared_array[:] = frame
+                image_id[...] = data["camtime"]
 
                 output_pipe.send(data)
 
@@ -69,13 +84,19 @@ def acquire_frames(output_pipe, shared_status):
             # _logger.debug(f"cpu-{cpu_num}: stopping acquire_frames worker")
             break
 
-def frame_distributor(input_pipe, process_pipe, save_pipe):
+def frame_distributor(input_pipe, shared_mem_name, shared_id_name, process_pipe, save_pipe):
 
      # Set CPU affinity
     p = psutil.Process(os.getpid())
-    # p.cpu_affinity([DEDICATED_FRAME_DISTRIBUTOR_CORE])
-    p.cpu_affinity(OTHER_CORES)
+    p.cpu_affinity([DEDICATED_FRAME_DISTRIBUTOR_CORE])
+    # p.cpu_affinity(OTHER_CORES)
     pid = p.pid
+
+    shared_mem = shm.SharedMemory(name=shared_mem_name)
+    shared_array = np.ndarray(FFI_SHAPE, dtype=FFI_DTYPE, buffer=shared_mem.buf)
+
+    id_mem = shm.SharedMemory(name=shared_id_name)
+    image_id = np.ndarray((), dtype=np.int64, buffer=id_mem.buf)
 
     while True:
         frame = input_pipe.recv()
@@ -91,7 +112,14 @@ def frame_distributor(input_pipe, process_pipe, save_pipe):
 
         # for frame in data:
         # frame_centre = crop_centre(frame['frame'], frame['frame'].shape[1]/2, frame['frame'].shape[0]/2)
-        process_pipe.send(frame)
+        frame_centre = crop_centre(shared_array, shared_array.shape[1]/2, shared_array.shape[0]/2)
+        process_pipe.send(frame_centre)
+
+        if image_id != frame["camtime"]:
+            _logger.error(f"Shared ID {image_id} does not match camera time {frame['camtime']}")
+
+        filename = frame["rawfile"]
+        np.save(filename, shared_array)
         save_pipe.send(frame)
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end frame_distributor")
@@ -105,20 +133,20 @@ def process_frames(input_pipe, centroid_process_queue, centroid_save_queue, piez
     pid = p.pid
 
     while True:
-        frame = input_pipe.recv()
+        image_centre = input_pipe.recv()
 
         cpu_num = p.cpu_num()
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start process_frames")
 
-        if frame is None:
+        if image_centre is None:
             centroid_process_queue.put(None)
             centroid_save_queue.put(None)
             piezo_actuation_queue.put(None)
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping process_frames worker")
             break
 
-        image = np.load(frame["rawfile"])
-        image_centre = crop_centre(image, image.shape[1]/2, image.shape[0]/2)
+        # image = np.load(frame["rawfile"])
+        # image_centre = crop_centre(image, image.shape[1]/2, image.shape[0]/2)
 
         centroid_data = find_centroid(image_centre)
         centroid_process_queue.put(copy.deepcopy(centroid_data))
@@ -137,18 +165,19 @@ def save_to_disk(input_pipe, compress_queue, shared_status):
     pid = p.pid
 
     while True:
-        frame = input_pipe.recv()
+        data = input_pipe.recv()
+        # filename = data["rawfile"]
 
         cpu_num = p.cpu_num()
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start save_to_disk")
 
-        if frame is None:
+        if data is None:
             compress_queue.put(None)
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping save_to_disk worker")
             break
 
         # result = create_fits(frame)
-        result = dump_data(frame)
+        result = dump_data(data)
 
         compress_queue.put(result)
         # cv2.imwrite(f'images/raw/frame_{frame["camtime"]}.png', frame["frame"])
@@ -307,6 +336,11 @@ def actuate_piezo(centroid_queue,shared_status):
 if __name__ == '__main__':
     manager = Manager()
     shared_status = manager.dict()
+    shared_mem = shm.SharedMemory(create=True, size=np.prod(FFI_SHAPE) * np.dtype(FFI_DTYPE).itemsize)
+    shared_array = np.ndarray(FFI_SHAPE, dtype=FFI_DTYPE, buffer=shared_mem.buf)
+
+    shared_id = shm.SharedMemory(create=True, size=np.dtype(np.int64).itemsize)
+    image_id = np.ndarray((), dtype=np.int64, buffer=shared_id.buf)
 
     frame_parent_conn, frame_child_conn = Pipe()
     process_parent_conn, process_child_conn = Pipe()
@@ -325,10 +359,10 @@ if __name__ == '__main__':
     # Process(target=csp_sender, args=(shared_status,)).start()
 
     # Start the frame acquisition and processing processes
-    acquire_frame_process = Process(target=acquire_frames, args=(frame_parent_conn, shared_status))
+    acquire_frame_process = Process(target=acquire_frames, args=(frame_parent_conn, shared_mem.name, shared_id.name, shared_status))
     acquire_frame_process.start()
 
-    frame_distributor_process = Process(target=frame_distributor, args=(frame_child_conn, process_parent_conn, save_parent_conn))
+    frame_distributor_process = Process(target=frame_distributor, args=(frame_child_conn, shared_mem.name, shared_id.name, process_parent_conn, save_parent_conn))
     frame_distributor_process.start()
 
     process_frames_process = Process(target=process_frames,
@@ -370,6 +404,11 @@ if __name__ == '__main__':
     save_centroid_process.join()
     piezo_process.join()
     compress_manager_process.join()
+
+    shared_mem.close()
+    shared_mem.unlink()
+    shared_id.close()
+    shared_id.unlink()
 
 
     _logger.debug(f"all workers finished")
