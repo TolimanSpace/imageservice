@@ -16,9 +16,9 @@ camera_settings = {
         'exposure': 50,
         'pixelformat': PySpin.PixelFormat_Mono12p,
         'framerate': 10,
-        'buffercount': 10,
-        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestOnly
-        # 'pixelformat': PySpin.PixelFormat_Mono8
+        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestOnly,
+        'width': 3648,
+        'offsetx': 912,
     }
 
 # with CameraInterface() as cam:
