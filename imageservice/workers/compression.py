@@ -43,7 +43,7 @@ def crop_areas(image, x_poss, y_poss, size = (480, 360)):
         # Round positions
         x_pos = round(x_pos)
         y_pos = round(y_pos)
-    
+
         # Calculate dimensions of the cutout
         half_size_x = size[1] // 2
         half_size_y = size[0] // 2
@@ -51,7 +51,7 @@ def crop_areas(image, x_poss, y_poss, size = (480, 360)):
         start_y = max(y_pos - half_size_y, 0)
         end_x = min(x_pos + half_size_x + (size[1] % 2), image.shape[1])
         end_y = min(y_pos + half_size_y + (size[0] % 2), image.shape[0])
-    
+
         # Extract cutout
         output.append(image[start_y:end_y, start_x:end_x])
 
@@ -74,14 +74,6 @@ def crop_sidelobes(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=
     - ndarray: crops around each sidelobe combined into a single rectangular array of size 4*width x 2*length
     """
     
-    
-    '''
-    TODO: fix this! it takes too long! options to consider:
-    - avoid division operations
-    - work with smaller arrays
-    - avoid for loops, somehow manipulate the arrays to do this all at once
-    '''
-
     output = []
     
     angles_radians = [np.deg2rad(angle_degrees), np.deg2rad(angle_degrees+90)]
@@ -98,13 +90,9 @@ def crop_sidelobes(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=
             if np.abs(angle-np.pi/2) <= np.pi/4:
                 mask = (np.abs(x - y / np.tan(angle)) <= width/2) & (np.abs(np.abs(y)-sidelobe_y) <= length/2)
             else:
-                time_0 = datetime.now()
                 mask = (np.abs(y - x * np.tan(angle)) <= width/2) & (np.abs(np.abs(x)-sidelobe_x) <= length/2)
-                time_1 = datetime.now()
-                print(str(time_1-time_0))
 
             output.append(image[mask].reshape((image[mask].shape[0]//width,width)))
-
 
     result = np.block([a for a in output])
 
