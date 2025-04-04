@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import curve_fit
+from datetime import datetime
 
 
 SIDELOBE_OFFSET = 1625
@@ -35,6 +36,28 @@ def crop_centre(image,x_pos,y_pos,size=128):
     return cropped
 
 
+def crop_areas(image, x_poss, y_poss, size = (480, 360)):
+    output = []
+
+    for x_pos, y_pos in zip(x_poss, y_poss):
+        # Round positions
+        x_pos = round(x_pos)
+        y_pos = round(y_pos)
+    
+        # Calculate dimensions of the cutout
+        half_size_x = size[1] // 2
+        half_size_y = size[0] // 2
+        start_x = max(x_pos - half_size_x, 0)
+        start_y = max(y_pos - half_size_y, 0)
+        end_x = min(x_pos + half_size_x + (size[1] % 2), image.shape[1])
+        end_y = min(y_pos + half_size_y + (size[0] % 2), image.shape[0])
+    
+        # Extract cutout
+        output.append(image[start_y:end_y, start_x:end_x])
+
+    return np.asarray(output)
+
+
 def crop_sidelobes(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=360):
     """
     Return a sub image of sidelobes for centred at (x_poss, y_poss) from an image
@@ -51,6 +74,14 @@ def crop_sidelobes(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=
     - ndarray: crops around each sidelobe combined into a single rectangular array of size 4*width x 2*length
     """
     
+    
+    '''
+    TODO: fix this! it takes too long! options to consider:
+    - avoid division operations
+    - work with smaller arrays
+    - avoid for loops, somehow manipulate the arrays to do this all at once
+    '''
+
     output = []
     
     angles_radians = [np.deg2rad(angle_degrees), np.deg2rad(angle_degrees+90)]
@@ -67,12 +98,59 @@ def crop_sidelobes(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=
             if np.abs(angle-np.pi/2) <= np.pi/4:
                 mask = (np.abs(x - y / np.tan(angle)) <= width/2) & (np.abs(np.abs(y)-sidelobe_y) <= length/2)
             else:
+                time_0 = datetime.now()
                 mask = (np.abs(y - x * np.tan(angle)) <= width/2) & (np.abs(np.abs(x)-sidelobe_x) <= length/2)
+                time_1 = datetime.now()
+                print(str(time_1-time_0))
 
             output.append(image[mask].reshape((image[mask].shape[0]//width,width)))
 
-    return np.block([a for a in output])
 
+    result = np.block([a for a in output])
+
+    return result
+
+def crop_sidelobes_new(image, x_poss, y_poss, centroid_data, angle_degrees = 45, width = 6, length=360):
+
+    output = []
+
+    angles_radians = np.array([np.deg2rad(angle_degrees), np.deg2rad(angle_degrees+90)])
+
+    sidelobes_x = (SIDELOBE_OFFSET * np.cos(angles_radians)).astype(int)
+    sidelobes_y = (SIDELOBE_OFFSET * np.sin(angles_radians)).astype(int)
+
+    sidelobes_x = np.concatenate((sidelobes_x, - sidelobes_x))
+    sidelobes_y = np.concatenate((sidelobes_y, - sidelobes_y))
+    angles_radians = np.concatenate((angles_radians, angles_radians))
+
+    y, x = np.indices(image.shape)
+    yy = (y - np.broadcast_to(y_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
+    xx = (x - np.broadcast_to(x_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
+
+    crop_im = crop_areas(image, centroid_data['x'] + sidelobes_x, centroid_data['y'] + sidelobes_y)
+    crop_x = crop_areas(xx, centroid_data['x'] + sidelobes_x, centroid_data['y'] + sidelobes_y)
+    crop_y = crop_areas(yy, centroid_data['x'] + sidelobes_x, centroid_data['y'] + sidelobes_y)
+
+    crop_im = np.transpose(crop_im, axes=(1,2,0))
+    crop_x = np.transpose(crop_x, axes=(1,2,3,0))
+    crop_y = np.transpose(crop_y, axes=(1,2,3,0))
+
+    tan = np.tan(angles_radians)
+    cot = 1/tan
+
+    mask = np.abs(crop_x - crop_y*cot) <= width/2
+
+    for a in range(2):
+        res = crop_im[mask[:,:,a,:]]
+        output.append(res.reshape(res.shape[0]//(width*2),width*2))
+
+    try:
+        result = np.block([a for a in output])
+    except ValueError:
+        result = np.concatenate([a.flatten() for a in output])
+
+
+    return result
 
 def sidelobe_crosssection(x, bkgd, amp_A, x_A, amp_B, x_B, sigma):
     """
