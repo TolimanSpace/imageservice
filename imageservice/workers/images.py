@@ -1,9 +1,10 @@
 import logging
 import ast
 import numpy as np
+import xarray as xr
 from astropy.io import fits
 from .processing import find_centroid, find_stars
-from .compression import crop_centre, crop_sidelobes
+from .compression import crop_centre, crop_sidelobes, crop_sidelobes_new
 
 _logger = logging.getLogger(__name__)
 
@@ -120,7 +121,8 @@ def compress_dump(raw_filename):
     star_poss = find_stars(core)
     x_poss = np.round(star_poss['xs'] + centroid_data['x'] - core.shape[1]//2)
     y_poss = np.round(star_poss['ys'] + centroid_data['y'] - core.shape[0]//2)
-    sidelobes = crop_sidelobes(raw_image, x_poss, y_poss)
+    # sidelobes = crop_sidelobes(raw_image, x_poss, y_poss)
+    sidelobes = crop_sidelobes_new(raw_image, x_poss, y_poss, centroid_data)
 
     core_hdu = fits.CompImageHDU(core, name="CORE")
     sidelobes_hdu = fits.CompImageHDU(sidelobes, name="SIDELOBES")
@@ -149,3 +151,61 @@ def compress_dump(raw_filename):
     _logger.info(f"FITS file written to {filename}")
 
     return True
+
+def compress_netcdf(raw_filename):
+
+    # Load raw image
+    raw_image = np.load(raw_filename)
+
+    # Load raw image metadata
+    metadata_file = raw_filename.strip(".npy")+".txt"
+
+    with open(metadata_file, "r") as file:
+        for line in file:
+            header = ast.literal_eval(line.strip())
+
+    # Crop core and sidelobes from raw image
+    centroid_data = find_centroid(raw_image)
+    core = crop_centre(raw_image, centroid_data["x"], centroid_data["y"])
+    star_poss = find_stars(core)
+    x_poss = np.round(star_poss['xs'] + centroid_data['x'] - core.shape[1]//2)
+    y_poss = np.round(star_poss['ys'] + centroid_data['y'] - core.shape[0]//2)
+    # sidelobes = crop_sidelobes(raw_image, x_poss, y_poss)
+    sidelobes = crop_sidelobes_new(raw_image, x_poss, y_poss, centroid_data)
+
+    # Create xarray Dataset
+    core_array = xr.DataArray(core, dims=("y", "x"))
+    sidelobe_array = xr.DataArray(sidelobes)
+
+    dataset = xr.Dataset({
+        "core": core_array,
+        "sidelobes": sidelobe_array
+    })
+
+    # Convert CAMTIME to a string to avoid truncation/error when creating netCDF file
+    header["CAMTIME"] = str(header["CAMTIME"])
+
+    # Add position information to header
+    header["CENTR_X"] = np.round(centroid_data['x'])
+    header["CENTR_Y"] = np.round(centroid_data['y'])
+    header["STAR_1_X"] = x_poss[0]
+    header["STAR_1_Y"] = y_poss[0]
+    header["STAR_2_X"] = x_poss[1]
+    header["STAR_2_Y"] = y_poss[1]
+
+    dataset.attrs = header
+
+    # Set compression encoding
+    dataset["core"].encoding = {"zlib": True, "complevel": 9}
+    dataset["sidelobes"].encoding = {"zlib": True, "complevel": 9}
+
+    # Write to disk
+    filename = f'images/compressed/frame_proc_{header["CAMTIME"]}.nc'
+    dataset.to_netcdf(filename)
+
+    # Log status
+    _logger.info(f"NetCDF file written to {filename}")
+
+    return True
+
+
