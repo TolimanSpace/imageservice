@@ -58,7 +58,7 @@ def crop_areas(image, x_poss, y_poss, size = (480, 360)):
     return np.asarray(output)
 
 
-def crop_sidelobes(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=360):
+def crop_sidelobes_old(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=360):
     """
     Return a sub image of sidelobes for centred at (x_poss, y_poss) from an image
 
@@ -98,9 +98,7 @@ def crop_sidelobes(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=
 
     return result
 
-def crop_sidelobes_new(image, x_poss, y_poss, centroid_data, angle_degrees = 45, width = 6, length=360):
-
-    output = []
+def crop_sidelobes(image, x_poss, y_poss, centroid_data, angle_degrees = 45, width = 6, length=360):
 
     angles_radians = np.array([np.deg2rad(angle_degrees), np.deg2rad(angle_degrees+90)])
 
@@ -128,15 +126,14 @@ def crop_sidelobes_new(image, x_poss, y_poss, centroid_data, angle_degrees = 45,
 
     mask = np.abs(crop_x - crop_y*cot) <= width/2
 
-    for a in range(2):
-        res = crop_im[mask[:,:,a,:]]
-        output.append(res.reshape(res.shape[0]//(width*2),width*2))
+    crop_im = np.tile(crop_im, (2,1,1,1)).transpose((3,0,2,1))
+
+    result = crop_im[mask.T]
 
     try:
-        result = np.block([a for a in output])
-    except ValueError:
-        result = np.concatenate([a.flatten() for a in output])
-
+        result = result.reshape(result.shape[0]//width, width)
+    except:
+        pass
 
     return result
 
