@@ -8,7 +8,7 @@ import psutil
 import serial
 
 # from workers.csp import *
-from workers.images import dump_data, compress_netcdf_bulk
+from workers.images import dump_data, compress_netcdf, compress_netcdf_bulk
 from workers.processing import *
 from workers.camera import CameraInterface, SimulatedCameraInterface, BaseCameraInterface
 from workers.compression import crop_centre
@@ -241,7 +241,10 @@ def compress(compress_queue,shared_status):
                 break
 
             # result = compress_dump(image_filename)
-            result = compress_netcdf_bulk(image_filenames)
+            if len(image_filenames) == 1:
+                result = compress_netcdf(image_filenames[0])
+            else:
+                result = compress_netcdf_bulk(image_filenames)
 
             if not result:
                 _logger.error(f"Error compressing frame ")
