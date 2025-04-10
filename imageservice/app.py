@@ -108,12 +108,14 @@ def frame_distributor(input_pipe, shared_mem_name, shared_id_name, process_pipe,
     image_id = np.ndarray((), dtype=np.int64, buffer=id_mem.buf)
 
     while True:
-        frame = input_pipe.recv()
+        metadata = input_pipe.recv()
+        frame = shared_array.copy()
+        frame_id = image_id.copy()
 
         cpu_num = p.cpu_num()
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start frame_distributor")
 
-        if frame is None:
+        if metadata is None:
             process_pipe.send(None)
             save_pipe.send(None)
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping frame_distributor worker")
@@ -121,15 +123,15 @@ def frame_distributor(input_pipe, shared_mem_name, shared_id_name, process_pipe,
 
         # for frame in data:
         # frame_centre = crop_centre(frame['frame'], frame['frame'].shape[1]/2, frame['frame'].shape[0]/2)
-        frame_centre = crop_centre(shared_array, shared_array.shape[1]/2, shared_array.shape[0]/2)
+        frame_centre = crop_centre(frame, frame.shape[1]/2, frame.shape[0]/2)
         process_pipe.send(frame_centre)
 
-        if image_id != frame["camtime"]:
-            _logger.error(f"Shared ID {image_id} does not match camera time {frame['camtime']}")
+        if frame_id != metadata["camtime"]:
+            _logger.error(f"Shared ID {frame_id} does not match camera time {metadata['camtime']}")
 
-        filename = frame["rawfile"]
-        np.save(filename, shared_array)
-        save_pipe.send(frame)
+        filename = metadata["rawfile"]
+        np.save(filename, frame)
+        save_pipe.send(metadata)
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end frame_distributor")
 
@@ -228,6 +230,9 @@ def compress(compress_queue,shared_status):
     pid = p.pid
 
     while True:
+        # Get netcdf compression encoding to use
+        netcdf_encoding = shared_status["compression_settings"].setdefault("netcdf_encoding", None)
+
         while shared_status["begin_compression"] == True:
             image_filenames = compress_queue.get()
 
@@ -242,9 +247,9 @@ def compress(compress_queue,shared_status):
 
             # result = compress_dump(image_filename)
             if len(image_filenames) == 1:
-                result = compress_netcdf(image_filenames[0])
+                result = compress_netcdf(image_filenames[0], encoding=netcdf_encoding)
             else:
-                result = compress_netcdf_bulk(image_filenames)
+                result = compress_netcdf_bulk(image_filenames, encoding=netcdf_encoding)
 
             if not result:
                 _logger.error(f"Error compressing frame ")
@@ -258,7 +263,14 @@ def compress(compress_queue,shared_status):
 
 def compress_manager(compress_queue, shared_status):
     while True:
-        max_workers = shared_status["compression_settings"]["max_workers"]
+        settings = shared_status.setdefault("compression_settings", {
+            'max_workers': 4,
+            'chunk_size': 1,
+            'netcdf_encoding': {"zlib": True, "complevel": 9}
+        })
+        max_workers = shared_status["compression_settings"].setdefault("max_workers", 4)
+        chunk_size = settings["chunk_size"] if "chunk_size" in settings else 10
+
         chunk_size = shared_status["compression_settings"]["chunk_size"]
 
         processes = []
