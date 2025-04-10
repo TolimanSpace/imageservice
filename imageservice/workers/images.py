@@ -164,7 +164,7 @@ def compress_dump(raw_filename):
 
     return True
 
-def compress_netcdf(raw_filename):
+def compress_netcdf(raw_filename, encoding=None):
 
     core, sidelobes, header = crop_image_with_metadata(raw_filename)
 
@@ -180,8 +180,9 @@ def compress_netcdf(raw_filename):
     dataset.attrs = header
 
     # Set compression encoding
-    dataset["core"].encoding = {"zlib": True, "complevel": 9}
-    dataset["sidelobes"].encoding = {"zlib": True, "complevel": 9}
+    if encoding:
+        dataset["core"].encoding = encoding
+        dataset["sidelobes"].encoding = encoding
 
     # Write to disk
     filename = f'images/compressed/frame_proc_{header["CAMTIME"]}.nc'
@@ -193,7 +194,7 @@ def compress_netcdf(raw_filename):
     return True
 
 
-def compress_netcdf_bulk(raw_filenames):
+def compress_netcdf_bulk(raw_filenames, encoding=None):
 
     # Get reference image
     ref_core, ref_sidelobes, header = crop_image_with_metadata(raw_filenames[0])
@@ -240,8 +241,11 @@ def compress_netcdf_bulk(raw_filenames):
     dataset.attrs = header
 
     # Set compression encoding
-    dataset["ref_core"].encoding = {"zlib": True, "complevel": 9}
-    dataset["ref_sidelobes"].encoding = {"zlib": True, "complevel": 9}
+    if encoding:
+        dataset["ref_core"].encoding = encoding
+        dataset["ref_sidelobes"].encoding = encoding
+        dataset["diff_core"].encoding = encoding
+        dataset["diff_sidelobes"].encoding = encoding
 
     # Write to disk
     filename = f'images/compressed/frame_proc_{header["0_CAMTIME"]}.nc'

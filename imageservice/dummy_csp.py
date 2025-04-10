@@ -4,7 +4,7 @@ import logging
 
 _logger = logging.getLogger(__name__)
 
-OBSERVING_TIME = 300
+OBSERVING_TIME = 60
 
 # CSP Listener Function
 def csp_listener(shared_status):
@@ -14,14 +14,15 @@ def csp_listener(shared_status):
         'exposure': 50,
         'pixelformat': PySpin.PixelFormat_Mono12p,
         'framerate': 10,
-        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestOnly,
+        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestFirst,
         'width': 3648,
         'offsetx': 912,
     }
     shared_status["camera_settings"] = camera_settings
     compression_settings = {
         'max_workers': 4,
-        'chunk_size': 10
+        'chunk_size': 1,
+        'netcdf_encoding': {"zlib": True, "complevel": 9}
     }
     shared_status["compression_settings"] = compression_settings
     shared_status["testing"] = False
@@ -32,7 +33,7 @@ def csp_listener(shared_status):
 
     shared_status["enable_camera"] = True
     _logger.info(f"Camera enambled")
-    time.sleep(1)
+    time.sleep(0.1)
     _logger.info(f"Beginning imaging")
     shared_status["begin_imaging"] = True
     _logger.info(f"Imaging for {OBSERVING_TIME} seconds")
