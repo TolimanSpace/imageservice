@@ -8,9 +8,9 @@ import psutil
 import serial
 
 # from workers.csp import *
-from workers.images import create_fits, compress_image, dump_data, compress_dump
+from workers.images import dump_data, compress_netcdf_bulk
 from workers.processing import *
-from workers.camera import CameraInterface
+from workers.camera import CameraInterface, SimulatedCameraInterface, BaseCameraInterface
 from workers.compression import crop_centre
 from dummy_csp import csp_listener
 
@@ -31,6 +31,38 @@ OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUI
 FFI_SHAPE = (3648, 3648)
 FFI_DTYPE = np.uint16
 
+def run_camera(camera: BaseCameraInterface, output_pipe, shared_array, image_id, pid, cpu_num):
+    _logger.debug(f"process {pid} on cpu-{cpu_num}: start acquire_frames_setup")
+
+    camera.apply_settings(shared_status["camera_settings"])
+    if shared_status["testing"] == True:
+        camera.apply_pattern()
+    camera.start()
+
+    _logger.debug(f"cpu-{cpu_num}: end acquire_frames_setup")
+
+    previous_image = -1
+
+    while shared_status["begin_imaging"] == True:
+        _logger.debug(f"process {pid} cpu-{cpu_num}: start acquire_frames")
+
+        data, frame = camera.capture_frame()
+
+        if data["i"] - previous_image > 1:
+            _logger.warning(f"{data['i'] - previous_image - 1} frame(s) skipped")
+        previous_image = data["i"]
+
+        shared_array[:] = frame
+        image_id[...] = data["camtime"]
+
+        output_pipe.send(data)
+
+        shared_status['frame_acquisition'] = 'success'
+
+        _logger.debug(f"process {pid} cpu-{cpu_num}: end acquire_frames")
+
+    camera.stop()
+
 def acquire_frames(output_pipe, shared_mem_name, shared_id_name, shared_status):
 
     # Set CPU affinity
@@ -47,37 +79,14 @@ def acquire_frames(output_pipe, shared_mem_name, shared_id_name, shared_status):
     image_id = np.ndarray((), dtype=np.int64, buffer=id_mem.buf)
 
     while True:
-        with CameraInterface() as camera:
-            _logger.debug(f"process {pid} on cpu-{cpu_num}: start acquire_frames_setup")
+        if "simulate" in shared_status and shared_status["simulate"] == True:
+            _logger.info(f"Using simulated images")
+            with SimulatedCameraInterface() as camera:
+                run_camera(camera, output_pipe, shared_array, image_id, pid, cpu_num)
 
-            camera.apply_settings(shared_status["camera_settings"])
-            if shared_status["testing"] == True:
-                camera.apply_pattern()
-            camera.start()
-
-            _logger.debug(f"cpu-{cpu_num}: end acquire_frames_setup")
-
-            previous_image = -1
-
-            while shared_status["begin_imaging"] == True:
-                _logger.debug(f"process {pid} cpu-{cpu_num}: start acquire_frames")
-
-                data, frame = camera.capture_frame()
-
-                if data["i"] - previous_image > 1:
-                    _logger.warning(f"{data['i'] - previous_image - 1} frame(s) skipped")
-                previous_image = data["i"]
-
-                shared_array[:] = frame
-                image_id[...] = data["camtime"]
-
-                output_pipe.send(data)
-
-                shared_status['frame_acquisition'] = 'success'
-
-                _logger.debug(f"process {pid} cpu-{cpu_num}: end acquire_frames")
-
-            camera.stop()
+        else:
+            with CameraInterface() as camera:
+                run_camera(camera, output_pipe, shared_array, image_id, pid, cpu_num)
 
         if "close_app" in shared_status and shared_status["close_app"] == True:
             output_pipe.send(None)
@@ -156,13 +165,15 @@ def process_frames(input_pipe, centroid_process_queue, centroid_save_queue, piez
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end process_frames")
 
 
-def save_to_disk(input_pipe, compress_queue, shared_status):
+def save_to_disk(input_pipe, shared_status):
 
     # Set CPU affinity
     p = psutil.Process(os.getpid())
     # p.cpu_affinity([DEDICATED_SAVE_FRAMES_CORE])
     p.cpu_affinity(OTHER_CORES)
     pid = p.pid
+
+    shared_status["saving"] = True
 
     while True:
         data = input_pipe.recv()
@@ -172,19 +183,19 @@ def save_to_disk(input_pipe, compress_queue, shared_status):
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start save_to_disk")
 
         if data is None:
-            compress_queue.put(None)
+            shared_status["saving"] = False
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping save_to_disk worker")
             break
 
         # result = create_fits(frame)
         result = dump_data(data)
 
-        compress_queue.put(result)
         # cv2.imwrite(f'images/raw/frame_{frame["camtime"]}.png', frame["frame"])
         if not result:
             _logger.error(f"FITS file not created")
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end save_to_disk")
+
 
 def save_manager(input_queue, compress_queue, shared_status, max_workers=2):
     while True:
@@ -218,19 +229,19 @@ def compress(compress_queue,shared_status):
 
     while True:
         while shared_status["begin_compression"] == True:
-            image_filename = compress_queue.get()
+            image_filenames = compress_queue.get()
 
             cpu_num = p.cpu_num()
             _logger.debug(f"process {pid} on cpu-{cpu_num}: start compress")
 
-            if image_filename is None:
+            if image_filenames is None:
                 _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping compress werker")
                 shared_status["end_compression"] = True
                 shared_status["begin_compression"] = False
                 break
-            # result = compress_image(image_filename)
 
-            result = compress_dump(image_filename)
+            # result = compress_dump(image_filename)
+            result = compress_netcdf_bulk(image_filenames)
 
             if not result:
                 _logger.error(f"Error compressing frame ")
@@ -242,17 +253,37 @@ def compress(compress_queue,shared_status):
             break
 
 
-def compress_manager(compress_queue, shared_status, max_workers=4):
+def compress_manager(compress_queue, shared_status):
     while True:
-        processes = []
-        while shared_status["begin_compression"] == True:
-            if len(processes) < max_workers:
-                p = Process(target = compress, args=(compress_queue, shared_status))
-                p.start()
-                processes.append(p)
-                _logger.info(f"Spawned compress worker {len(processes)}")
+        max_workers = shared_status["compression_settings"]["max_workers"]
+        chunk_size = shared_status["compression_settings"]["chunk_size"]
 
-            time.sleep(1)
+        processes = []
+
+        if "saving" in shared_status and shared_status["saving"] == False:
+            # Populate queue
+            _logger.info(f"Populating compression queue")
+            image_dir = 'images/raw/'
+            image_paths = sorted([
+                os.path.join(image_dir, f)
+                for f in os.listdir(image_dir)
+                if f.lower().endswith('.npy')
+            ])
+
+            for i in range(0, len(image_paths), chunk_size):
+                compress_queue.put(image_paths[i:i+chunk_size])
+
+            #Add end signal
+            compress_queue.put(None)
+
+            while shared_status["begin_compression"] == True:
+                if len(processes) < max_workers:
+                    p = Process(target = compress, args=(compress_queue, shared_status))
+                    p.start()
+                    processes.append(p)
+                    _logger.info(f"Spawned compress worker {len(processes)}")
+
+                time.sleep(1)
 
         if "end_compression" in shared_status and shared_status["end_compression"] == True:
             for _ in processes[1:]:
@@ -354,6 +385,7 @@ if __name__ == '__main__':
     piezo_actuation_queue = Queue()
     compress_queue = Queue()
 
+
     # Start the CSP processes
     Process(target=csp_listener, args=(shared_status,)).start()
     # Process(target=csp_sender, args=(shared_status,)).start()
@@ -369,7 +401,7 @@ if __name__ == '__main__':
             args=(process_child_conn, centroid_process_queue, centroid_save_queue, piezo_actuation_queue, shared_status))
     process_frames_process.start()
     
-    save_frame_process = Process(target=save_to_disk, args=(save_child_conn, compress_queue, shared_status))
+    save_frame_process = Process(target=save_to_disk, args=(save_child_conn, shared_status))
     save_frame_process.start()
     
     # save_manager_process = Process(target=save_manager, args=(save_queue, compress_queue, shared_status))
@@ -385,16 +417,7 @@ if __name__ == '__main__':
     compress_manager_process = Process(target = compress_manager, args=(compress_queue, shared_status))
     compress_manager_process.start()
  
-
-    # # Start the compression processes
-    # with Pool(processes=3) as compress_pool:
-    #     while not compress_queue.empty():
-    #         compress_pool.apply_async(compress, args=(compress_queue, shared_status))
-
-    #     compress_pool.close()
-    #     compress_pool.join()
-
-
+    # Join processes
     acquire_frame_process.join()
     frame_distributor_process.join()
     process_frames_process.join()
