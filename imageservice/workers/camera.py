@@ -2,7 +2,8 @@ import logging
 import threading
 import psutil
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 import numpy as np
 
 # from simple_pyspin import Camera
@@ -25,8 +26,94 @@ def list_cameras():
 
     return _SYSTEM.GetCameras()
 
+class BaseCameraInterface:
+    """
+    A base interface for a PySpin or Simualted Camera
+    """
+    def __init__(self):
+        pass
 
-class CameraInterface:
+    def __enter__(self):
+        return self
+ 
+    def start(self):
+        pass
+
+    def apply_settings(self, settings):
+        pass
+
+    def apply_pattern(self):
+        pass
+
+    def capture_frame(self):
+        raise NotImplementedError
+    
+    def stop(self):
+        pass
+
+    def __exit__(self, type, value, traceback):
+        pass
+
+class SimulatedCameraInterface(BaseCameraInterface):
+    def __init__(self, image_dir = "images/simulated"):
+        self.image_paths = sorted([
+            os.path.join(image_dir, f)
+            for f in os.listdir(image_dir)
+            if f.lower().endswith('.npy')
+        ])
+
+        self.index = 0
+        self.exposure = 'Simulated Image'
+        self.last_frame_time = time.time()
+        self.frame_interval = 0.1
+
+    def capture_frame(self):
+        now = time.time()
+        elapsed = now - self.last_frame_time
+        if elapsed < self.frame_interval:
+            time.sleep(self.frame_interval - elapsed)
+
+        self.last_frame_time = time.time()
+        comptime = str(datetime.now())
+
+        if self.index >= len(self.image_paths):
+            # Loop to first image
+            self.index = 0
+        image_data = np.load(self.image_paths[self.index])
+        self.index += 1
+
+        # Create metadata
+        i = self.index
+        camtime = int(self.last_frame_time*1e6)
+        pxlfmt = image_data.dtype.name
+        xoff = 0
+        xpad = 0
+        yoff = 0
+        ypad = 0
+
+        filename = f'images/raw/frame_{camtime}.npy'
+
+        # Package data in a dict
+        metadata = {
+            "i": i,
+            "rawfile": filename,
+            "camtime": camtime,
+            "comptime": comptime,
+            "pxlfmt": pxlfmt,
+            "xoff": xoff,
+            "xpad": xpad,
+            "yoff": yoff,
+            "ypad": ypad,
+            "exposure": self.exposure
+            }
+        
+        # _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
+
+        return metadata, image_data
+
+
+
+class CameraInterface(BaseCameraInterface):
     """
     A class to interface with a PySpin Camera
 
@@ -308,7 +395,7 @@ class CameraInterface:
             filename = f'images/raw/frame_{camtime}.npy'
 
             # Package data in a dict
-            data = {
+            metadata = {
                 "i": i,
                 "rawfile": filename,
                 "camtime": camtime,
@@ -323,12 +410,7 @@ class CameraInterface:
             
             # _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
-            # Dump data
-            # image_result.Save(filename)
-            # image_data.tofile(filename)
-            # np.save(filename, image_data)
-
-            return data, image_data
+            return metadata, image_data
 
     def capture_frames(self, n_frames):
         """
