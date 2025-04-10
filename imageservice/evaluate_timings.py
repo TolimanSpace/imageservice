@@ -26,12 +26,11 @@ for file in image_files:
             camtimes.append(camtime)
     elif file.split('.')[1] == 'nc':
         with xr.open_dataset(os.path.join(image_path, file)) as data:
-            comtime = datetime.strptime(data.COMTIME, '%Y-%m-%d %H:%M:%S.%f')
-            camtime = int(data.CAMTIME)
-
-            comtimes.append(comtime)
-            camtimes.append(camtime)
-
+            for k, v in data.attrs.items():
+                if 'CAMTIME' in k:
+                    camtimes.append(int(v))
+                if 'COMTIME' in k:
+                    comtimes.append(datetime.strptime(v, '%Y-%m-%d %H:%M:%S.%f'))
     elif file.split('.')[1] == 'png':
         camtime = int(file.split('.')[0].split('_')[1])
 
