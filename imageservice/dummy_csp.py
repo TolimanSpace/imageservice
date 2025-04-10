@@ -8,6 +8,7 @@ OBSERVING_TIME = 300
 
 # CSP Listener Function
 def csp_listener(shared_status):
+    shared_status["begin_imaging"] = False
     camera_settings = {
         'acquisitionmode': PySpin.AcquisitionMode_Continuous,
         'exposure': 50,
@@ -18,7 +19,13 @@ def csp_listener(shared_status):
         'offsetx': 912,
     }
     shared_status["camera_settings"] = camera_settings
-    shared_status["testing"] = True
+    compression_settings = {
+        'max_workers': 4,
+        'chunk_size': 10
+    }
+    shared_status["compression_settings"] = compression_settings
+    shared_status["testing"] = False
+    shared_status["simulate"] = True
 
     _logger.info(f"Stop compression process")
     shared_status["begin_compression"] = False

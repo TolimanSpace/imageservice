@@ -1,6 +1,7 @@
 import ast
 import os
 
+import xarray as xr
 from astropy.io import fits
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -23,6 +24,14 @@ for file in image_files:
 
             comtimes.append(comtime)
             camtimes.append(camtime)
+    elif file.split('.')[1] == 'nc':
+        with xr.open_dataset(os.path.join(image_path, file)) as data:
+            comtime = datetime.strptime(data.COMTIME, '%Y-%m-%d %H:%M:%S.%f')
+            camtime = int(data.CAMTIME)
+
+            comtimes.append(comtime)
+            camtimes.append(camtime)
+
     elif file.split('.')[1] == 'png':
         camtime = int(file.split('.')[0].split('_')[1])
 
