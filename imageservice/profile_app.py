@@ -32,7 +32,7 @@ with open(log_file, "r") as file:
                 state.append(np.nan)
         elif 'WARNING' in line:
             data = line.strip()
-            skipped_frames = skipped_frames + int(data.split()[5])
+            skipped_frames = skipped_frames + int(data.split()[-3])
 
 print(f"Total skipped frames: {skipped_frames}")
                 
