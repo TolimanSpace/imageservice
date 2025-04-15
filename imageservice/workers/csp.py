@@ -1,4 +1,4 @@
-from ..ErrorCode import ErrorCode, result
+from ErrorCode import ErrorCode, result
 from ...csp import csp
 
 # CSP Configuration
