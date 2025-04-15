@@ -20,12 +20,7 @@ FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 logging.basicConfig(filename = "process_log.txt", level = logging.DEBUG, format=FORMAT)
 
 DEDICATED_ACQUIRE_FRAMES_CORE = 2
-# DEDICATED_SAVE_FRAMES_CORE = 3
-# DEDICATED_SAVE_FRAMES_CORE_2 = 4
 DEDICATED_FRAME_DISTRIBUTOR_CORE = 4
-OTHER_CORES = [c for c in range(psutil.cpu_count())]
-# OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE]]
-# OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE, DEDICATED_SAVE_FRAMES_CORE, DEDICATED_FRAME_DISTRIBUTOR_CORE]]
 OTHER_CORES = [c for c in range(psutil.cpu_count()) if c not in [DEDICATED_ACQUIRE_FRAMES_CORE,DEDICATED_FRAME_DISTRIBUTOR_CORE]]
 
 FFI_SHAPE = (3648, 3648)
@@ -57,8 +52,6 @@ def run_camera(camera: BaseCameraInterface, output_pipe, shared_array, image_id,
 
         output_pipe.send(data)
 
-        shared_status['frame_acquisition'] = 'success'
-
         _logger.debug(f"process {pid} cpu-{cpu_num}: end acquire_frames")
 
     camera.stop()
@@ -68,7 +61,6 @@ def acquire_frames(output_pipe, shared_mem_name, shared_id_name, shared_status):
     # Set CPU affinity
     p = psutil.Process(os.getpid())
     p.cpu_affinity([DEDICATED_ACQUIRE_FRAMES_CORE])
-    # p.cpu_affinity(OTHER_CORES)
     pid = p.pid
     cpu_num = p.cpu_num()
 
@@ -90,7 +82,7 @@ def acquire_frames(output_pipe, shared_mem_name, shared_id_name, shared_status):
 
         if "close_app" in shared_status and shared_status["close_app"] == True:
             output_pipe.send(None)
-            # _logger.debug(f"cpu-{cpu_num}: stopping acquire_frames worker")
+            _logger.debug(f"cpu-{cpu_num}: stopping acquire_frames worker")
             break
 
 def frame_distributor(input_pipe, shared_mem_name, shared_id_name, process_pipe, save_pipe):
@@ -98,7 +90,6 @@ def frame_distributor(input_pipe, shared_mem_name, shared_id_name, process_pipe,
      # Set CPU affinity
     p = psutil.Process(os.getpid())
     p.cpu_affinity([DEDICATED_FRAME_DISTRIBUTOR_CORE])
-    # p.cpu_affinity(OTHER_CORES)
     pid = p.pid
 
     shared_mem = shm.SharedMemory(name=shared_mem_name)
@@ -121,8 +112,10 @@ def frame_distributor(input_pipe, shared_mem_name, shared_id_name, process_pipe,
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping frame_distributor worker")
             break
 
-        # for frame in data:
-        # frame_centre = crop_centre(frame['frame'], frame['frame'].shape[1]/2, frame['frame'].shape[0]/2)
+        while metadata["camtime"] < frame_id:
+            _logger.warning(f"Frame {metadata['camtime']} not saved in time - 1 frame skipped")
+            metadata = input_pipe.recv()
+
         frame_centre = crop_centre(frame, frame.shape[1]/2, frame.shape[0]/2)
         process_pipe.send(frame_centre)
 
@@ -156,9 +149,6 @@ def process_frames(input_pipe, centroid_process_queue, centroid_save_queue, piez
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping process_frames worker")
             break
 
-        # image = np.load(frame["rawfile"])
-        # image_centre = crop_centre(image, image.shape[1]/2, image.shape[0]/2)
-
         centroid_data = find_centroid(image_centre)
         centroid_process_queue.put(copy.deepcopy(centroid_data))
         centroid_save_queue.put(copy.deepcopy(centroid_data))
@@ -171,7 +161,6 @@ def save_to_disk(input_pipe, shared_status):
 
     # Set CPU affinity
     p = psutil.Process(os.getpid())
-    # p.cpu_affinity([DEDICATED_SAVE_FRAMES_CORE])
     p.cpu_affinity(OTHER_CORES)
     pid = p.pid
 
@@ -179,7 +168,6 @@ def save_to_disk(input_pipe, shared_status):
 
     while True:
         data = input_pipe.recv()
-        # filename = data["rawfile"]
 
         cpu_num = p.cpu_num()
         _logger.debug(f"process {pid} on cpu-{cpu_num}: start save_to_disk")
@@ -189,44 +177,18 @@ def save_to_disk(input_pipe, shared_status):
             _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping save_to_disk worker")
             break
 
-        # result = create_fits(frame)
         result = dump_data(data)
 
-        # cv2.imwrite(f'images/raw/frame_{frame["camtime"]}.png', frame["frame"])
         if not result:
-            _logger.error(f"FITS file not created")
+            _logger.error(f"Metadata file not created")
 
         _logger.debug(f"process {pid} on cpu-{cpu_num}: end save_to_disk")
 
-
-def save_manager(input_queue, compress_queue, shared_status, max_workers=2):
-    while True:
-        processes = []
-        time.sleep(1)
-        while shared_status["begin_imaging"] == True:
-            if len(processes) < max_workers:
-                p = Process(target = save_to_disk, args=(input_queue, compress_queue, shared_status))
-                p.start()
-                processes.append(p)
-                _logger.info(f"Spawned save_to_disk worker {len(processes)}")
-
-            time.sleep(1)
-
-        if input_queue.empty():
-            for _ in processes[1:]:
-                input_queue.put(None)
-
-            for p in processes:
-                p.join()
-
-            _logger.info(f"Stopping save_manager")
-            break
 
 def compress(compress_queue,shared_status):
 
     # Set CPU affinity
     p = psutil.Process(os.getpid())
-    # p.cpu_affinity(OTHER_CORES)
     pid = p.pid
 
     while True:
@@ -240,12 +202,11 @@ def compress(compress_queue,shared_status):
             _logger.debug(f"process {pid} on cpu-{cpu_num}: start compress")
 
             if image_filenames is None:
-                _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping compress werker")
+                _logger.debug(f"process {pid} on cpu-{cpu_num}: stopping compress worker")
                 shared_status["end_compression"] = True
                 shared_status["begin_compression"] = False
                 break
 
-            # result = compress_dump(image_filename)
             if len(image_filenames) == 1:
                 result = compress_netcdf(image_filenames[0], encoding=netcdf_encoding)
             else:
@@ -318,7 +279,7 @@ def serial_comm(centroid_queue,shared_status):
     p.cpu_affinity(OTHER_CORES)
     pid = p.pid
 
-    # ser = serial.Serial('/dev/ttyUSB0', 9600)
+    ser = serial.Serial('/dev/ttyUSB0', 9600)
     while True:
         centroid = centroid_queue.get()
 
@@ -382,24 +343,24 @@ def actuate_piezo(centroid_queue,shared_status):
 if __name__ == '__main__':
     manager = Manager()
     shared_status = manager.dict()
+
+    # Create shared memories
     shared_mem = shm.SharedMemory(create=True, size=np.prod(FFI_SHAPE) * np.dtype(FFI_DTYPE).itemsize)
     shared_array = np.ndarray(FFI_SHAPE, dtype=FFI_DTYPE, buffer=shared_mem.buf)
 
     shared_id = shm.SharedMemory(create=True, size=np.dtype(np.int64).itemsize)
     image_id = np.ndarray((), dtype=np.int64, buffer=shared_id.buf)
 
+    # Lay pipes
     frame_parent_conn, frame_child_conn = Pipe()
     process_parent_conn, process_child_conn = Pipe()
     save_parent_conn, save_child_conn = Pipe()
 
-    # frame_queue = Queue()
-    # process_queue = Queue()
-    # save_queue = Queue()
+    # Form queues
     centroid_process_queue = Queue()
     centroid_save_queue = Queue()
     piezo_actuation_queue = Queue()
     compress_queue = Queue()
-
 
     # Start the CSP processes
     Process(target=csp_listener, args=(shared_status,)).start()
@@ -419,9 +380,6 @@ if __name__ == '__main__':
     save_frame_process = Process(target=save_to_disk, args=(save_child_conn, shared_status))
     save_frame_process.start()
     
-    # save_manager_process = Process(target=save_manager, args=(save_queue, compress_queue, shared_status))
-    # save_manager_process.start()
-
     serial_comm_process = Process(target=serial_comm, args=(centroid_process_queue, shared_status))
     serial_comm_process.start()
     save_centroid_process = Process(target=save_centroid, args=(centroid_save_queue, shared_status))
@@ -437,7 +395,6 @@ if __name__ == '__main__':
     frame_distributor_process.join()
     process_frames_process.join()
     save_frame_process.join()
-    # save_manager_process.join()
     serial_comm_process.join()
     save_centroid_process.join()
     piezo_process.join()
