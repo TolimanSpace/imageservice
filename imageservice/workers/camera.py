@@ -1,12 +1,10 @@
 import logging
 import threading
-import psutil
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import numpy as np
 
-# from simple_pyspin import Camera
 import PySpin
 
 _logger = logging.getLogger(__name__)
@@ -16,6 +14,12 @@ _SYSTEM = None
 def list_cameras():
     """
     Return a list of Spinnaker cameras
+
+    Initializes the PySpin system instance if it is not already initialized,
+    and returns a list of available cameras.
+
+    Returns:
+        PySpin.CameraList: A list of available Spinnaker cameras.
     """
 
     global _SYSTEM
@@ -28,7 +32,10 @@ def list_cameras():
 
 class BaseCameraInterface:
     """
-    A base interface for a PySpin or Simualted Camera
+    A base interface for a PySpin or Simulated Camera
+
+    This class provides a template for camera interfaces, including methods for starting, stopping
+    applying settings, and capturing frames.
     """
     def __init__(self):
         pass
@@ -37,25 +44,58 @@ class BaseCameraInterface:
         return self
  
     def start(self):
+        """
+        Start the camera interface
+        """
         pass
 
     def apply_settings(self, settings):
+        """
+        Apply settings to the camera.
+
+        Args:
+            settings (dict): A dictionary of settings to apply.
+        """
         pass
 
     def apply_pattern(self):
+        """
+        Set camera to use test pattern
+        """
         pass
 
     def capture_frame(self):
+        """
+        Capture a frame from the camera.
+
+        Raises:
+            NotImplementedError: This method should be implemented by subclassses.
+        """
         raise NotImplementedError
     
     def stop(self):
+        """
+        Stop the camera interface
+        """
         pass
 
     def __exit__(self, type, value, traceback):
         pass
 
 class SimulatedCameraInterface(BaseCameraInterface):
+    """
+    A simulated camera interface for testing purposes.
+
+    This class simulates a camera by loading images from a specified directory
+    and returning them as if they were captured by a real camera
+    """
     def __init__(self, image_dir = "images/simulated"):
+        """
+        Initialize the simulated camera interface.
+
+        Args:
+            image_dir (str): The directory containing simulated images.
+        """
         self.image_paths = sorted([
             os.path.join(image_dir, f)
             for f in os.listdir(image_dir)
@@ -68,6 +108,14 @@ class SimulatedCameraInterface(BaseCameraInterface):
         self.frame_interval = 0.1
 
     def capture_frame(self):
+        """
+        Capture a frame from the simulated camera.
+
+        This method loads an image from the specified directory and returns it along with metadata.
+
+        Returns:
+            tuple: A tuple containing metadata (dict) and image data (numpy array) .
+        """
         now = time.time()
         elapsed = now - self.last_frame_time
         if elapsed < self.frame_interval:
@@ -107,7 +155,6 @@ class SimulatedCameraInterface(BaseCameraInterface):
             "exposure": self.exposure
             }
         
-        # _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
         return metadata, image_data
 
@@ -117,14 +164,71 @@ class CameraInterface(BaseCameraInterface):
     """
     A class to interface with a PySpin Camera
 
-    Atributes
+    Attributes
     ---------
+    _lock : threading.Lock
+        A lock to ensure thread saftey.
+    cam : PySpin.Camera
+        The camera object
+    running : bool
+        Indicated if the camera is running.
+    processor : PySpin.ImageProcessor
+        The image processor for the camera
 
     Methods
     -------
-
+    __init__():
+        Initializes the camera interface.
+    exposure:
+        Gets or sets the camera's exposure time.
+    framerate:
+        Gets or sets the camera's frame rate.
+    resolution:
+        Gets or sets the camera's resolution.
+    acquisitionmode:
+        Gets or sets the camera's acquisition mode.
+    pixelformat:
+        Gets or sets the camera's pixel format.
+    buffercount:
+        Gets or sets the camera's buffer size.
+    bufferhandlingmode:
+        Gets or sets how the camera handles images in the buffer.
+    offsetx:
+        Gets or sets the X offset of the camera's images.
+    offsety:
+        Gets or sets the Y offset of the camera's images.
+    width:
+        Gets or sets the width of the camera's images.
+    height:
+        Gets or sets the height of the camera's images.
+    init():
+        Initializes the camera
+    __enter__():
+        Initializes the camera and returns the instance
+    close():
+        Closes the camera.
+    __exit__(type, value, traceback):
+        Closes the camera and releases the PySpin system instance.
+    start():
+        Starts recording images.
+    stop():
+        Stops recording images.
+    apply_setting(settings):
+        Applies settings to the camera.
+    apply_pattern():
+        Applies a test pattern to the camera.
+    capture_frame():
+        Captures a single image frame.
+    capture_frames(n_frames):
+        Captures multiple iamge frames.
     """
+
     def __init__(self):
+        """
+        Initializes the CameraInterface.
+
+        This method initializes the camera interface, sets up the camera, and configures the image processor.
+        """
         self._lock = threading.Lock()
 
         cam_list = list_cameras()
@@ -142,69 +246,171 @@ class CameraInterface(BaseCameraInterface):
 
     @property
     def exposure(self):
+        """
+        Gets the camera's exposure time.
+
+        Returns:
+            float: The current exposure time.
+        """
         return self.cam.ExposureTime.GetValue()
 
     @exposure.setter
     def exposure(self, value):
+        """
+        Sets the camera's exposure time.
+
+        Args:
+            value (float): The desired exposure time.
+        """
         self.cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
         self.cam.ExposureTime.SetValue(value)
 
     @property
     def framerate(self):
+        """
+        Gets the camera's frame rate.
+
+        Returns:
+            float: The current frame rate.
+        """
         return self.cam.AcquisitionFrameRate.GetValue()
         
     @framerate.setter
     def framerate(self, value):
+        """
+        Sets the camera's frame rate.
+
+        Args:
+            value (float): The desired frame rate.
+        """
         self.cam.AcquisitionFrameRateEnable.SetValue(True)
         self.cam.AcquisitionFrameRate.SetValue(value)
 
     @property
     def resolution(self):
-        return self._resolution
+        """
+        Gets the camera's resolution.
+
+        Returns:
+            tuple: A tuple containing the height (int) and width (int) of images
+        """
+        width = self.cam.Width.GetValue()
+        height = self.cam.Height.GetValue()
+        return (height, width)
 
     @resolution.setter
     def resolution(self, value):
-        self._resolution = value
+        """
+        Sets the camera's resolution.
+
+        Args:
+            value (tuple): A tuple containing the desired height (int) and width (int) of images
+        """
+        self.apply_settings({'height': value[0], 'width': value[1]})
 
     @property
     def acquisitionmode(self):
+        """
+        Gets the camera's acquisition mode.
+
+        Returns:
+            int: The current acquisition mode.
+        """
         return self.cam.AcquisitionMode.GetValue()
         
     @acquisitionmode.setter
     def acquisitionmode(self, value):
+        """
+        Sets the camera's acquisition mode
+
+        Args:
+            value (int): The desired acquisition mode.
+        """
+
         self.cam.AcquisitionMode.SetValue(value)
         
     @property
     def pixelformat(self):
+        """
+        Gets the camera's pixel format.
+
+        Returns:
+            int: The current pixel format.
+        """
         return self.cam.PixelFormat.GetValue()
 
     @pixelformat.setter
     def pixelformat(self,value):
+        """
+        Sets the camera's pixel format.
+
+        Args:
+            value (int): The desired pixel format.
+        """
         self.cam.PixelFormat.SetValue(value)
 
     @property
     def buffercount(self):
+        """
+        Gets the camera's buffer count.
+
+        Returns:
+            int: The current buffer count.
+        """
         return self.cam.TLStream.StreamBufferCountManual.GetValue()
     
     @buffercount.setter
     def buffercount(self,value):
+        """
+        Sets the camera's buffer count.
+
+        Args:
+            value (int): The desired buffer count.
+        """
+
         self.cam.TLStream.StreamBufferCountMode.SetValue(PySpin.StreamBufferCountMode_Manual)
         self.cam.TLStream.StreamBufferCountManual.SetValue(value)
 
     @property
     def bufferhandlingmode(self):
+        """
+        Gets the camera's buffer handling mode.
+
+        Returns:
+            int: The current buffer handling mode.
+        """
         return self.cam.TLStream.StreamBufferHandlingMode.GetValue()
     
     @bufferhandlingmode.setter
     def bufferhandlingmode(self,value):
+        """
+        Sets the camera's buffer handling mode.
+
+        Args:
+            value (int): The current buffer handling mode.
+        """
         self.cam.TLStream.StreamBufferHandlingMode.SetValue(value)
 
     @property
     def offsetx(self):
+        """
+        Gets the camera's image X offset.
+
+        Returns:
+            int: The current X offset.
+        """
         return self.cam.OffsetX.GetValue()
     
     @offsetx.setter
     def offsetx(self,value):
+        """
+        Sets the camera's image X offset.
+
+        The image width should be set prior to adjusting the X offset. 
+
+        Args:
+            value (int): The desired X offset.
+        """
         inc = self.cam.OffsetX.GetInc()
         minval = self.cam.OffsetX.GetMin()
         maxval = self.cam.OffsetX.GetMax()
@@ -224,10 +430,24 @@ class CameraInterface(BaseCameraInterface):
 
     @property
     def offsety(self):
+        """
+        Gets the camera's image Y offset.
+
+        Returns:
+            int: The current Y offset.
+        """
         return self.cam.OffsetY.GetValue()
     
     @offsety.setter
     def offsety(self,value):
+        """
+        Sets the camera's image Y offset.
+
+        The image height should be set prior to adjusting the Y offset.
+
+        Args:
+            value (int): The desired Y offset.
+        """
         inc = self.cam.OffsetY.GetInc()
         minval = self.cam.OffsetY.GetMin()
         maxval = self.cam.OffsetY.GetMax()
@@ -247,10 +467,22 @@ class CameraInterface(BaseCameraInterface):
 
     @property
     def width(self):
+        """
+        Gets the camera's image width.
+
+        Returns:
+            int: The current width.
+        """
         return self.cam.Width.GetValue()
     
     @width.setter
     def width(self,value):
+        """
+        Sets the camera's image width.
+
+        Returns:
+            int: The desired width.
+        """
         inc = self.cam.Width.GetInc()
         minval = self.cam.Width.GetMin()
         maxval = self.cam.Width.GetMax()
@@ -270,10 +502,22 @@ class CameraInterface(BaseCameraInterface):
     
     @property
     def height(self):
+        """
+        Gets the camera's image height.
+
+        Returns:
+            int: The current height.
+        """
         return self.cam.Height.GetValue()
     
     @height.setter
     def height(self,value):
+        """
+        Sets the camera's image height.
+
+        Returns:
+            int: The desired height.
+        """
         inc = self.cam.Height.GetInc()
         minval = self.cam.Height.GetMin()
         maxval = self.cam.Height.GetMax()
@@ -346,6 +590,12 @@ class CameraInterface(BaseCameraInterface):
 
 
     def apply_settings(self, settings):
+        """
+        Applies settings to the camera.
+
+        Args:
+            settings (dict): A dictionary of settings to apply
+        """
         with self._lock:
             _logger.info(f"Setting camera properties")
             for setting, value in settings.items():
@@ -359,13 +609,19 @@ class CameraInterface(BaseCameraInterface):
                     _logger.warning(f"Unknown setting: {setting}")
 
     def apply_pattern(self):
+        """
+        Applies a test pattern to the camera
+        """
         with self._lock:
             self.cam.TestPatternGeneratorSelector.SetValue(PySpin.TestPatternGeneratorSelector_Sensor)
             self.cam.TestPattern.SetValue(PySpin.TestPattern_SensorTestPattern)
 
     def capture_frame(self):
         """
-        Capture an image
+        Capture a single image frame
+
+        Returns:
+            tuple: A tuple containing metadata (dict) and image data (numpy array)
         """
         with self._lock:
             comptime = str(datetime.now())
@@ -382,9 +638,8 @@ class CameraInterface(BaseCameraInterface):
             image_result.Release()
 
             # Get metadata
+            # TODO: add more settings to metadata dictionary as required
             i = image_converted.GetFrameID()
-            # width = image_converted.GetWidth()
-            # height = image_converted.GetHeight()
             camtime = image_converted.GetTimeStamp()
             pxlfmt = image_converted.GetPixelFormatName()
             xoff = image_converted.GetXOffset()
@@ -407,25 +662,25 @@ class CameraInterface(BaseCameraInterface):
                 "ypad": ypad,
                 "exposure": self.exposure
                 }
-            
-            # _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
             return metadata, image_data
 
     def capture_frames(self, n_frames):
         """
-        Capture n_images
-        """
+        Capture multiple image frames.
 
-        # Get n images
-        # Calculate centroids and push to queue?
-        # Store images and metadata
-        # Return images and metadata in bulk
+        Args:
+            n_frames (int): The number of frames to capture.
+
+        Returns:
+            list: A list of dictionaries containing metadata and image data for each frame.
+        """
 
         results = []
 
         with self._lock:
             for frame in range(n_frames):
+                # TODO: this duplicates code in capture_frame and can be refactored
                 comptime = str(datetime.now())
                 image_result = self.cam.GetNextImage(1000)
 
@@ -441,17 +696,14 @@ class CameraInterface(BaseCameraInterface):
                 image_data = image_converted.GetNDArray() >> 4
 
                 # Get metadata
+                # TODO: add more settings to metadata dictionary as required
                 i = image_converted.GetFrameID()
-                width = image_converted.GetWidth()
-                height = image_converted.GetHeight()
                 camtime = image_converted.GetTimeStamp()
                 pxlfmt = image_converted.GetPixelFormatName()
                 xoff = image_converted.GetXOffset()
                 xpad = image_converted.GetXPadding()
                 yoff = image_converted.GetYOffset()
                 ypad = image_converted.GetYPadding()
-
-                _logger.info(f"Grabbed Image {i}, width = {width}, height = {height} at time {camtime}")
 
                 # Get data
                 image_data = image_converted.GetNDArray()
@@ -473,57 +725,3 @@ class CameraInterface(BaseCameraInterface):
                 results.append(data)
 
         return results
-
-
-# camera = CameraInterface()
-
-
-def handle_packet(packet):
-    """Handle incoming CSP packets."""
-    # Extract command data
-    command_data = packet.data()
-
-    # Check if it's a camera setting command
-    if command_data.startswith("camera_setting:"):
-        _, setting, value = command_data.split(":")
-        setattr(camera, setting, value)
-
-    # ... Handle other commands as necessary
-
-    # Send response
-    response = "OK"  # or any other appropriate response
-    csp.sendto(packet.source, packet.destination, packet.port, response)
-
-
-def camera_loop():
-    """Continuously acquire frames from the camera using the provided settings."""
-    while True:
-        # Check and apply camera settings
-        camera.apply_settings()
-
-        # Capture frame
-        frame = camera.capture_frame()
-
-        # ... Do anything else required with the frame
-
-
-def csp_listen_loop():
-    """Continuously listen for incoming CSP packets."""
-    while True:
-        packet = csp.recv()
-        if packet:
-            handle_packet(packet)
-
-
-if __name__ == "__main__":
-    # Start the camera loop in its own thread
-    camera_thread = threading.Thread(target=camera_loop)
-    camera_thread.start()
-
-    # Start the CSP listening loop in its own thread
-    csp_thread = threading.Thread(target=csp_listen_loop)
-    csp_thread.start()
-
-    # Join the threads (optional, if you want the main thread to wait until both threads have finished)
-    camera_thread.join()
-    csp_thread.join()
