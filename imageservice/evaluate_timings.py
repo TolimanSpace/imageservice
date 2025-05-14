@@ -8,33 +8,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-image_path = "/home/toliman-dev/toliman/imageservice/imageservice/images/compressed/"
-image_files = os.listdir(image_path)
+metadata_path = "/home/toliman-dev/toliman/imageservice/imageservice/images/raw/"
+metadata_files = sorted(os.listdir(metadata_path))
 
 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
 comtimes = []
 camtimes = []
 
-for file in image_files:
-    if file.split('.')[1] == 'fits':
-        with fits.open(os.path.join(image_path, file)) as hdul:
-            comtime = datetime.strptime(hdul[0].header['COMTIME'], '%Y-%m-%d %H:%M:%S.%f')
-            camtime = int(hdul[0].header['CAMTIME'])
+for file in metadata_files:
+    if file.endswith("txt"):
+        with open(os.path.join(metadata_path, file), "r") as file:
+            for line in file:
+                header = ast.literal_eval(line.strip())
+                comtime = datetime.strptime(header['COMTIME'], '%Y-%m-%d %H:%M:%S.%f')
+                camtime = int(header['CAMTIME'])
 
             comtimes.append(comtime)
             camtimes.append(camtime)
-    elif file.split('.')[1] == 'nc':
-        with xr.open_dataset(os.path.join(image_path, file)) as data:
-            for k, v in data.attrs.items():
-                if 'CAMTIME' in k:
-                    camtimes.append(int(v))
-                if 'COMTIME' in k:
-                    comtimes.append(datetime.strptime(v, '%Y-%m-%d %H:%M:%S.%f'))
-    elif file.split('.')[1] == 'png':
-        camtime = int(file.split('.')[0].split('_')[1])
+    # elif file.split('.')[1] == 'nc':
+    #     with xr.open_dataset(os.path.join(image_path, file)) as data:
+    #         for k, v in data.attrs.items():
+    #             if 'CAMTIME' in k:
+    #                 camtimes.append(int(v))
+    #             if 'COMTIME' in k:
+    #                 comtimes.append(datetime.strptime(v, '%Y-%m-%d %H:%M:%S.%f'))
+    # elif file.split('.')[1] == 'png':
+    #     camtime = int(file.split('.')[0].split('_')[1])
 
-        camtimes.append(camtime)
+    #     camtimes.append(camtime)
 
 
 fig, ax = plt.subplots(nrows = 2, figsize = (10,10))

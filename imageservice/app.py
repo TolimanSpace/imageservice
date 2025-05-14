@@ -279,7 +279,7 @@ def serial_comm(centroid_queue,shared_status):
     p.cpu_affinity(OTHER_CORES)
     pid = p.pid
 
-    ser = serial.Serial('/dev/ttyUSB0', 9600)
+    # ser = serial.Serial('/dev/ttyUSB0', 9600)
     while True:
         centroid = centroid_queue.get()
 
