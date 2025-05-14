@@ -190,7 +190,6 @@ def compress(compress_queue,shared_status):
     # Set CPU affinity
     p = psutil.Process(os.getpid())
     pid = p.pid
-
     while True:
         # Get netcdf compression encoding to use
         netcdf_encoding = shared_status["compression_settings"].setdefault("netcdf_encoding", None)
@@ -269,6 +268,7 @@ def compress_manager(compress_queue, shared_status):
                 p.join()
 
             _logger.info(f"Stopping compress_manager")
+            print("End compression")
             break
 
 

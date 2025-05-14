@@ -1,6 +1,7 @@
 import logging
 import ast
 import numpy as np
+import time
 import xarray as xr
 from astropy.io import fits
 from .processing import find_centroid, find_stars
@@ -166,8 +167,14 @@ def compress_dump(raw_filename):
 
 def compress_netcdf(raw_filename, encoding=None):
 
+    print("Single image compression")
+    start_time = time.time()
+    # Get reference image
     core, sidelobes, header = crop_image_with_metadata(raw_filename)
-
+    end_time = time.time()
+    print(f"Single crop duration: {end_time - start_time:.2f} seconds")
+    
+    start_time = time.time()
     # Create xarray Dataset
     core_array = xr.DataArray(core, dims=("y", "x"))
     sidelobe_array = xr.DataArray(sidelobes)
@@ -190,27 +197,35 @@ def compress_netcdf(raw_filename, encoding=None):
 
     # Log status
     _logger.info(f"NetCDF file written to {filename}")
+    end_time = time.time()
+    print(f"NetCDF encoding and write duration: {end_time - start_time:.2f} seconds")
 
     return True
 
 
 def compress_netcdf_bulk(raw_filenames, encoding=None):
 
+    start_time = time.time()
     # Get reference image
     ref_core, ref_sidelobes, header = crop_image_with_metadata(raw_filenames[0])
+    end_time = time.time()
+    print(f"Single crop duration: {end_time - start_time:.2f} seconds")
 
     diff_cores = []
     diff_sidelobes = []
     header = [header]
 
     # Get differences from reference for remaining images
+    start_time = time.time()
     for filename in raw_filenames[1:]:
-
+        
         core, sidelobes, metadata = crop_image_with_metadata(filename)
 
         diff_cores.append(core - ref_core)
         diff_sidelobes.append(sidelobes - ref_sidelobes)
         header.append(metadata)
+    end_time = time.time()
+    print(f"Bulk crop duration({len(raw_filenames)} files): {end_time - start_time:.2f} seconds")
 
     diff_cores = np.asarray(diff_cores)
     diff_sidelobes = np.asarray(diff_sidelobes)

@@ -4,7 +4,7 @@ import logging
 
 _logger = logging.getLogger(__name__)
 
-OBSERVING_TIME = 60
+OBSERVING_TIME = 10
 
 # CSP Listener Function
 def csp_listener(shared_status):
@@ -21,11 +21,11 @@ def csp_listener(shared_status):
     shared_status["camera_settings"] = camera_settings
     compression_settings = {
         'max_workers': 4,
-        'chunk_size': 1,
+        'chunk_size': 10,
         'netcdf_encoding': {"zlib": True, "complevel": 9}
     }
     shared_status["compression_settings"] = compression_settings
-    shared_status["testing"] = False
+    shared_status["testing"] = True
     shared_status["simulate"] = False
 
     _logger.info(f"Stop compression process")
@@ -55,7 +55,7 @@ def csp_listener(shared_status):
     # _logger.info(f"Imaging stopped")
     # shared_status["enable_camera"] = False
     # _logger.info(f"Camera disabled")
-    
+    print("Begin compression")
     _logger.info(f"Begin compression process")
     shared_status["begin_compression"] = True
     
