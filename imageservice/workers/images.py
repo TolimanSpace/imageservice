@@ -257,4 +257,44 @@ def compress_netcdf_bulk(raw_filenames, encoding=None):
 
     return True
 
+def uncrop_image(core, sidelobes, header, image_dims = (3648, 3648)):
+    '''
+    Docstring for uncrop_image
+
+    :param core: Array of core image
+    :param sidelobes: Array of sidelobe image
+    :param header: Dict of header data
+    :param image_dims: Dimensions of the original full-frame image
+    '''
+
+    # Create empty image
+    image = np.zeros(image_dims)
+
+    # Arrays of x and y indicies
+    y, x = np.indices(image_dims)
+
+    # Process header data
+    centroid_data = {
+        "x": header["CENTR_X"],
+        "y": header["CENTR_Y"],
+        "t": header["COMTIME"]
+    }
+    x_poss = np.asarray([header["STAR_1_X"], header["STAR_2_X"]])
+    y_poss = np.asarray([header["STAR_1_Y"], header["STAR_2_Y"]])
+
+    # Find core indices
+    core_x = crop_centre(x, centroid_data["x"], centroid_data["y"])
+    core_y = crop_centre(y, centroid_data["x"], centroid_data["y"])
+
+    # Place core
+    image[core_y, core_x] = core
+
+    # Find sidelobe indices
+    sidelobe_x = crop_sidelobes(x, x_poss, y_poss, centroid_data)
+    sidelobe_y = crop_sidelobes(y, x_poss, y_poss, centroid_data)
+
+    # Place sidelobes
+    image[sidelobe_y, sidelobe_x] = sidelobes
+
+    return image
 
