@@ -586,6 +586,7 @@ class CameraInterface(BaseCameraInterface):
         if self.running:
             self.cam.EndAcquisition()
             _logger.info("Ending image acquisiton")
+            print("Ending image acquisiton")
         self.running = False
 
 

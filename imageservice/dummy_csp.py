@@ -11,10 +11,10 @@ def csp_listener(shared_status):
     shared_status["begin_imaging"] = False
     camera_settings = {
         'acquisitionmode': PySpin.AcquisitionMode_Continuous,
-        'exposure': 50,
+        'exposure': 90000,
         'pixelformat': PySpin.PixelFormat_Mono12p,
         'framerate': 10,
-        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestFirst,
+        'bufferhandlingmode': PySpin.StreamBufferHandlingMode_NewestOnly,
         'width': 3648,
         'offsetx': 912,
     }
@@ -26,7 +26,7 @@ def csp_listener(shared_status):
     }
     shared_status["compression_settings"] = compression_settings
     shared_status["testing"] = False
-    shared_status["simulate"] = True
+    shared_status["simulate"] = False
 
     _logger.info(f"Stop compression process")
     shared_status["begin_compression"] = False
