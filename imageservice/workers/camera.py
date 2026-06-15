@@ -418,6 +418,77 @@ class XimeaCamera:
             self._img = None
 
 
+    #-------------------
+    # Image acquisition
+    #-------------------
+
+    def acquire_frame(self, timeout_ms: int = 1000) -> AcquiredFrame:
+        """
+        Block until the next frame is available and return it as an AcquiredFrame
+
+        Parameters
+        ----------
+        timeout_ms : int
+            Maximum time to wait for the next frame in milliseconds.
+            At 100 Hz the nominal inter-frame intervale is 10 ms; 1000 ms is a generous
+            default to catch genuine hardware faults.
+
+        Returns
+        -------
+        AcquiredFrame
+            Contains copies of the five date-bearing ROI arrays (uint16) and frame metadata.
+            Arrays are independent of the camera's internal buffer and safe to pass to other
+            threads.
+
+        Raises
+        ------
+        RuntimeError
+            If called outside an active acquisition session.
+        xiapi.Xi_error
+            On camera hardware or transport errors.
+        """
+
+        if not self.acquiring:
+            raise RuntimeError(
+                "acquire_frame() called outside of an active acquisition session."
+            )
+        
+        self._cam.get_image(self._img, timeout=timeout_ms)
+        host_time = time.monotonic()
+
+        # Reconstruct hardware timestamp in nanoseconds from seconds + microseconds
+        timestamp_ns = (
+            int(self._img.tsSec) * 1_000_000_000
+            + int(self._img.tsUSec) * 1_000
+        )
+
+        # Get the full multi-ROI strip as a numpy array
+        strip: np.ndarray = self._img.get_image_data_numpy()
+
+        # Defensive copy: the underlying buffer may be reused by the next get_image() call
+        strip = strip.copy()
+
+        # Slice into individual ROIs; discard interstitual regions
+        if self._config.mode is CameraMode.MULTI_ROI:
+            roi_arrays = _parse_roi_strip(strip, self._config.rois)
+        elif self.config.mode is CameraMode.SINGLE_ROI:
+            roi_arrays = {"single_roi": strip}
+        else:
+            roi_arrays = {"full_frame": strip}
+
+        self._frame_counter += 1
+
+        return AcquiredFrame(
+            frame_id=int(self._img.nframe),
+            timestamp_ns=timestamp_ns,
+            host_time=host_time,
+            mode=self._config.mode,
+            rois=roi_arrays,
+            nframes_dropped=int(self._img.frames_lost),
+        )
+
+    #------------------
+    
 
 
     #-------------------
