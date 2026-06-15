@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, List, Dict
 
 import numpy as np
 
@@ -76,7 +78,7 @@ class CameraConfig:
         Exposure time in microseconds
     frame_rate_hz : float
         Target frame rate in Hz.
-    rois : list[RoiDefinition] or None
+    rois : List[RoiDefinition] or None
         Required for MULTI_ROI or SINGLE_ROI, must be None for FULL_FRAME
     output_bit_depth : int
         Sensor output bit depth. 12 for this application
@@ -84,12 +86,15 @@ class CameraConfig:
         Number of frames to allocate in the Ximea transport buffer.
         Larger values reduce the risk of dropping frames at high rates
         at the cost of latency and memory. Default of 8 as a starting point.
+        The value is clamped at runtime to the camera's own reported [min,max] range,
+        so the actual size of the buffer may differ from what is requested. A warning
+        is logged if clamping occurs.
     """
     serial_number: Optional[str]
     mode: CameraMode
     exposure_us: int
     frame_rate_hz: float
-    rois: Optional[list[RoiDefinition]] = None
+    rois: Optional[List[RoiDefinition]] = None
     output_bit_depth: int = 12
     transport_buffer_size: int = 8
 
@@ -190,7 +195,7 @@ class AcquiredFrame:
     timestamp_ns: int
     host_time: float
     mode: CameraMode
-    rois: dict[str, np.ndarray]
+    rois: Dict[str, np.ndarray]
     nframes_dropped: int
 
 #---------------------------------
@@ -199,8 +204,8 @@ class AcquiredFrame:
 
 def _parse_roi_strip(
         strip: np.ndarray,
-        rois: list[RoiDefinition],
-) -> dict[str, np.ndarray]:
+        rois: List[RoiDefinition],
+) -> Dict[str, np.ndarray]:
     """
     TODO: Write this code for multi-ROI, discarding unwanted regions
 
@@ -215,7 +220,7 @@ def _parse_roi_strip(
     strip : np.ndarray
         2-D uint16 array of shape (total_height, width) as returned by
         img.get_image_data_numpy().
-    rois : list[RoiDefinition]
+    rois : List[RoiDefinition]
         The 9 RoiDefinition objects in index order
 
     Returns
@@ -273,6 +278,7 @@ class XimeaCamera:
         self._img: Optional[xiapi.Image] = None
         self._frame_counter: int = 0
         self._acquiring: bool = False
+        self._last_acq_nframe: int = -1 # for dropped-frame detection
 
     def __enter__(self) -> XimeaCamera:
         self.open()
@@ -346,17 +352,25 @@ class XimeaCamera:
         # 3. ROI geometry: mode-dependent
         if cfg.mode is CameraMode.MULTI_ROI:
             self._configure_rois()
+        if cfg.mode is CameraMode.SINGLE_ROI:
+            self._configure_single_roi()
         elif cfg.mode is CameraMode.FULL_FRAME:
             self._configure_full_frame()
 
         # 4. Frame rate
-        cam.set_acq_timing_mode("XI_ACQ_TIMING_MODE_FRAME_RATE")
+        timing_mode = _select_timing_mode(cam.get_device_name())
+        cam.set_acq_timing_mode(timing_mode)
         cam.set_framerate(cfg.frame_rate_hz)
         actual_fps = cam.get_framerate()
         logger.info(
-            "Frame rate: requested=%.2f Hz actual=%.2f Hz",
-            cfg.frame_rate_hz, actual_fps
+            "Frame rate: timing_mode=%s requested=%.2f Hz reported=%.2f Hz",
+            timing_mode, cfg.frame_rate_hz, actual_fps
         )
+        if timing_mode == "XI_ACQ_TIMING_MODE_FRAME_RATE_LIMIT":
+            logger.info(
+                "Note: FRAME_RATE_LIMIT is a rate ceiling not a locked clock."
+                "Use frame timestamps to measure the actual acquisition rate."
+            )
 
         # 5. Exposure
         frame_period_us = 1_000_000.0 / cfg.frame_rate_hz
@@ -370,8 +384,20 @@ class XimeaCamera:
         logger.info("Exposure %d us", cfg.exposure_us)
 
         # 6. Transport buffer
-        cam.set_buffers_queue_size(cfg.transport_buffer_size)
-        logger.debug("Transport buffer size = %d frames", cfg.transport_buffer_size)
+        buf_min = cam.get_buffers_queue_size_minimum()
+        buf_max = cam.get_buffers_queue_size_maximum()
+        buf_size = max(buf_min, min(cfg.transport_buffer_size, buf_max))
+        if buf_size != cfg.transport_buffer_size:
+            logger.warning(
+                "Requested transport_buffer_size=%d is outside the camera's "
+                "valid range [%d, %d]; clamped to %d.",
+                cfg.transport_buffer_size, buf_min, buf_max, buf_size,
+            )
+        cam.set_buffers_queue_size(buf_size)
+        logger.debug(
+            "Transport buffer size = %d frames (range [%d, %d])", 
+            buf_size, buf_min, buf_max
+        )
 
         logger.info("Camera configuration complete")
 
@@ -387,6 +413,7 @@ class XimeaCamera:
         self._cam.start_acquisition()
         self._acquiring = True
         self._frame_counter = 0
+        self._last_acq_nframe = -1
         logger.info("Acquisition started")
 
     def stop(self) -> None:
@@ -448,7 +475,7 @@ class XimeaCamera:
             On camera hardware or transport errors.
         """
 
-        if not self.acquiring:
+        if not self.is_acquiring:
             raise RuntimeError(
                 "acquire_frame() called outside of an active acquisition session."
             )
@@ -476,15 +503,29 @@ class XimeaCamera:
         else:
             roi_arrays = {"full_frame": strip}
 
+        # acq_nframe is a monotonically increasing acquisition counter that
+        # does not reset on parameter changes. Gaps between consecutive values
+        # indicate dropped frames
+        acq_nframe = int(self._img.acq_nframe)
+        if self._last_acq_nframe == -1:
+            nframes_dropped = 0
+        else:
+            nframes_dropped = max(0, acq_nframe - self._last_acq_nframe -1)
+        if nframes_dropped > 0:
+            logger.warning(
+                "Dropped %d frame(s) detected between acq_nframe %d and %d.",
+                nframes_dropped, self._last_acq_nframe, acq_nframe
+            )
+        self._last_acq_nframe = acq_nframe
         self._frame_counter += 1
 
         return AcquiredFrame(
-            frame_id=int(self._img.nframe),
+            frame_id=acq_nframe,
             timestamp_ns=timestamp_ns,
             host_time=host_time,
             mode=self._config.mode,
             rois=roi_arrays,
-            nframes_dropped=int(self._img.frames_lost),
+            nframes_dropped=nframes_dropped,
         )
 
     #------------------
@@ -524,19 +565,6 @@ class XimeaCamera:
         """
         cam = self._cam
 
-        # Deactivate regions 1-8 in case the camera was previously used in MULTI_ROI mode
-        for idx in range(1,9):
-            try:
-                cam.set_param("region_selector", idx)
-                cam.set_param("region_mode", 0)
-            except Exception:
-                # Not all camera support 9 regions; ignore errors beyond
-                # the camera's actual region count
-                break
-
-        # Configure region 0 to full sensor extend.
-        cam.set_param("region_selector", 0)
-
         max_width = cam.get_width_maximum()
         max_height = cam.get_height_maximum()
 
@@ -550,7 +578,7 @@ class XimeaCamera:
             max_width, max_height,
         )
         
-    def _configure_roi(self) -> None:
+    def _configure_single_roi(self) -> None:
         """
         Configure a single ROI on the camera.
         """
@@ -559,24 +587,19 @@ class XimeaCamera:
 
         # Validate camera alignment constraints before touching hardware
         # These incremental values are camera-model dependent
-        height_inc = cam.get_height_increment()
-        width_inc = cam.get_width_increment()
-        offset_y_inc = cam.get_offsetY_increment()
-        offset_x_inc = cam.get_offsetX_increment()
 
-        _check_alignment("width", roi.width, width_inc)
-        _check_alignment("height", roi.height, height_inc)
-        _check_alignment("offset_x", roi.offset_x, offset_x_inc)
-        _check_alignment("offset_y", roi.offset_y, offset_y_inc)
+        _check_alignment("width", roi.width, cam.get_width_increment())
+        _check_alignment("height", roi.height, cam.get_height_increment())
+        _check_alignment("offset_x", roi.offset_x, cam.get_offsetX_increment())
+        _check_alignment("offset_y", roi.offset_y, cam.get_offsetY_increment())
 
-        cam.set_param("region_selector", 0)
         cam.set_width(roi.width)
-        cam.set_offsetX(roi.offset_x)
         cam.set_height(roi.height)
+        cam.set_offsetX(roi.offset_x)
         cam.set_offsetY(roi.offset_y)
 
         logger.debug(
-            "ROI[0] %s: width=%d offset_x=%d height=%d offset_y=%d",
+            "ROI %s configured: width=%d offset_x=%d height=%d offset_y=%d",
             roi.label, roi.width, roi.offset_x, roi.height, roi.offset_y, 
         )
 
@@ -598,3 +621,26 @@ def _check_alignment(name: str, value: int, increment: int) -> None:
             f"increment ({increment}). Adjust to a multiple of {increment}"
         )
 
+# Camera families that support XI_ACQ_TIMING_MODE_FRAME_RATE (exact FPGA clock).
+#All other families use XI_ACQ_TIMING_MODE_FRAME_RATE_LIMIT (rate ceiling).
+_EXACT_TIMING_PREFIXES = ("MQ", "MD")
+
+def _select_timing_mode(device_name: bytes) -> str:
+    """
+    Return the correct acq_timing_mode string for the connected camera.
+
+    XI_ACQ_TIMING_MODE_FRAME_RATE       -- exact period FPGA clock.
+                                           Supported by MQ and MD families only.
+    XI_ACQ_TIMING_MODE_FRAME_RATE_LIMIT -- frame rate ceiling.
+                                           Supported by CB, MC, MT, MX families
+
+    Parameters
+    ----------
+    device_name : bytes
+        Value returned by cam.get_device_name(), e.g. b"MC203MG-SY-UB"
+    """
+    name_str = device_name.decode("ascii", errors="ignore").upper()
+    for prefix in _EXACT_TIMING_PREFIXES:
+        if name_str.startswith(prefix):
+            return "XI_ACQ_TIMING_MODE_FRAME_RATE"
+    return "XI_ACQ_TIMING_MODE_FRAME_RATE_LIMIT"
