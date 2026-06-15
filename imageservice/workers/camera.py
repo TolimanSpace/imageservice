@@ -193,26 +193,38 @@ class AcquiredFrame:
     rois: dict[str, np.ndarray]
     nframes_dropped: int
 
+#---------------------------------
+# ROI strip parsing
+#---------------------------------
 
-
-def list_cameras():
+def _parse_roi_strip(
+        strip: np.ndarray,
+        rois: list[RoiDefinition],
+) -> dict[str, np.ndarray]:
     """
-    Return a list of Spinnaker cameras
+    TODO: Write this code for multi-ROI, discarding unwanted regions
 
-    Initializes the PySpin system instance if it is not already initialized,
-    and returns a list of available cameras.
+    Slice the concatenated multi-ROI strip into individual region arrays
 
-    Returns:
-        PySpin.CameraList: A list of available Spinnaker cameras.
+    The Ximea drive returns all active regions stacked vertically in a single
+    image buffer. Region heights accumulate from top to bottom in region index order.
+    Only data-bearing regions are included in the returned dict.
+
+    Parameters
+    ----------
+    strip : np.ndarray
+        2-D uint16 array of shape (total_height, width) as returned by
+        img.get_image_data_numpy().
+    rois : list[RoiDefinition]
+        The 9 RoiDefinition objects in index order
+
+    Returns
+    -------
+    dict mapping label -> 2-D uint16 subarray (a view not a copy)
     """
 
-    global _SYSTEM
+    pass
 
-    if _SYSTEM is None:
-        _SYSTEM = PySpin.System.GetInstance()
-        _logger.info("Starting PySpin system instance")
-
-    return _SYSTEM.GetCameras()
 
 class BaseCameraInterface:
     """
