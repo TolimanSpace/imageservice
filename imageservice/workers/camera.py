@@ -390,10 +390,33 @@ class XimeaCamera:
         logger.info("Acquisition started")
 
     def stop(self) -> None:
-        pass
+        """
+        Stop image acquisition
+        """
+        if self._cam is None or not self._acquiring:
+            return
+        self._cam.stop_acquisition()
+        self._acquiring = False
+        logger.info(
+            "Acquisition stopped. Total frames acquired %d",
+            self._frame_counter
+        )
     
     def close(self) -> None:
-        pass
+        """
+        Close the camera device and release resources
+        """
+        if self._cam is None:
+            return
+        try:
+            self._cam.close_device()
+            logger.info("Camera closed.")
+        except Exception:
+            logger.exception("Exception while closing camera.")
+        finally:
+            self._cam = None
+            self._img = None
+
 
 
 
