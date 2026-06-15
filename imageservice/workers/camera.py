@@ -1,15 +1,199 @@
 import logging
-import threading
-import os
 import time
-from datetime import datetime
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import Optional
+
 import numpy as np
 
-import PySpin
+from ximea import xiapi
 
-_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-_SYSTEM = None
+#-----------------------------
+# Operating Mode
+#-----------------------------
+
+class CameraMode(Enum):
+    """
+    Selects the camera operating mode
+
+    MULTI_ROI - 3x3 multi-region grid; frame rate 10-100 Hz
+    SINGLE_ROI - Single Region of Interest
+    FULL_FRAME - Entire sensor as a single region; diagnostic use only;
+                 no frame rate lower bound enforced
+    """
+    MULTI_ROI = auto()
+    SINGLE_ROI = auto()
+    FULL_FRAME = auto()
+
+#----------------------------
+# Data Structures
+#----------------------------
+
+@dataclass(frozen=True)
+class RoiDefinition:
+    """
+    Geometry for one region
+
+    Attributes
+    ----------
+    height : int
+        Height of this region in pixels. Must be divisible by the camera's height increment.
+        (query with get_height_increment())
+    offset_y : int
+        Y-offset of this region form the top of the sensor in pixels
+    width : int
+        Width of this region in pixels. Must be divisible by the camera's width increment.
+    offset_x : int
+        X-offset from the left of the sensor in pixels
+    label : str
+        Human-readable identifier, e.g. "top_left", "centre"
+    is_data : bool
+        True for regions to be saved; False for interstitial regions that are acquired but
+        immediately discarded
+    """
+    height: int
+    offset_y: int
+    width: int
+    offset_x: int
+    label: str
+    is_data: bool = True
+
+@dataclass(frozen=True)
+class CameraConfig:
+    """
+    Complete camera configuration. Validated on construction
+
+    Attributes
+    ----------
+    serial_number : str or None
+        Camera serial number for open_device_by_SN(). Pass None to open the first
+        available device
+    mode: CameraMode
+        MULTI_ROI for normal science acquisition; FULL_FRAME for diagnostics
+    exposure_us : int
+        Exposure time in microseconds
+    frame_rate_hz : float
+        Target frame rate in Hz.
+    rois : list[RoiDefinition] or None
+        Required for MULTI_ROI or SINGLE_ROI, must be None for FULL_FRAME
+    output_bit_depth : int
+        Sensor output bit depth. 12 for this application
+    transport_buffer_size : int
+        Number of frames to allocate in the Ximea transport buffer.
+        Larger values reduce the risk of dropping frames at high rates
+        at the cost of latency and memory. Default of 8 as a starting point.
+    """
+    serial_number: Optional[str]
+    mode: CameraMode
+    exposure_us: int
+    frame_rate_hz: float
+    rois: Optional[list[RoiDefinition]] = None
+    output_bit_depth: int = 12
+    transport_buffer_size: int = 8
+
+    def __post_init__(self) -> None:
+        if self.output_bit_depth != 12:
+            raise ValueError(
+                f"output_bit_depth must be 12, got {self.output_bit_depth}"
+            )
+
+        if self.frame_rate_hz <= 0.0:
+            raise ValueError(
+                f"frame_rate_hz must be positive, got {self.frame_rate_hz}"
+            )
+        
+        if self.mode is CameraMode.MULTI_ROI:
+            self._validate_multi_roi()
+        elif self.mode is CameraMode.SINGLE_ROI:
+            self._validate_single_roi()
+        elif self.mode is CameraMode.FULL_FRAME:
+            self._validate_full_frame()
+        else:
+            raise ValueError(
+                f"Camera mode not recognised, got {self.mode}"
+            )
+        
+    def _validate_multi_roi(self) -> None:
+        if self.rois is None:
+            raise ValueError("rois must be provided for MULTI_ROI mode")
+        if len(self.rois) != 9:
+            raise ValueError(
+                f"Exactly 9 ROI definitions required for MULTI_ROI mode, got {len(self.rois)}"
+            )
+        
+        # Validate data discard pattern
+        expected_data = {0, 2, 4, 6, 8}
+        expected_discard = {1, 3, 5, 7}
+        for idx, roi in enumerate(self.rois):
+            if idx in expected_data and not roi.is_data:
+                raise ValueError(
+                    f"ROI at index {idx} must be a data region (is_data=True)"
+                )
+            if idx in expected_discard and roi.is_data:
+                raise ValueError(
+                    f"ROI at index {idx} must be a discard region (is_data=False)"
+                )
+        
+        # TODO: Validate ROIS for width/height consistency
+
+
+    def _validate_single_roi(self) -> None:
+        if self.rois is None:
+            raise ValueError("roi must be provided for SINGLE_ROI mode")
+        if len(self.rois) != 1:
+            raise ValueError(
+                f"Exactly 1 ROI definitions required for SINGLE_ROI mode, got {len(self.rois)}"
+            )
+        
+        # Validate data discard pattern
+        if not self.rois[0].is_data:
+            raise ValueError(
+                f"ROI must be a data region (is_data=True)"
+            )
+
+    def _validate_full_frame(self) -> None:
+        if self.rois is not None:
+            raise ValueError(
+                "rois must be None for FULL_FRAME mode; image geometry is determined"
+                "automatically from the sensor dimensions"
+            )
+
+@dataclass
+class AcquiredFrame:
+    """
+    Output of a single camera acquisition cycle
+
+    Attributes
+    ----------
+    frame_id : int
+        Monotonically increasing frame counter from the camera
+    timestamp_ns : int
+        Camera hardware timestamp in nanoseconds (from img.tsSec / tsUSec)
+    host_time : float
+        time.monotonic() recorded immediately after get_image() returns,
+        for latency diagnostics
+    mode : CameraMode
+        The operationg mode active when this frame was acquired
+    rois : dict[str, np.ndarray]
+        MULTI_ROI: mapping of label -> 2-D uint16 array for the five data-bearing 
+        regions. Interstitual regions are absent
+        SINGLE_ROI: single entry keyed "single_roi" containing the single region image
+        as a 2-D uint array
+        FULL_FRAME: single entry keyed "full_frame" containing the complete sensor image
+        as a 2-D uint array (sensor_height x sensor_width)
+    nframes_dropped : int
+        Cummulative dropped frame count reported by the camera at this frame
+    """
+    frame_id: int
+    timestamp_ns: int
+    host_time: float
+    mode: CameraMode
+    rois: dict[str, np.ndarray]
+    nframes_dropped: int
+
+
 
 def list_cameras():
     """
