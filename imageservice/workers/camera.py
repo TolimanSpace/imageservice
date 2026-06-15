@@ -488,7 +488,24 @@ class XimeaCamera:
         )
 
     #------------------
+    # Properties
+    #------------------
+
+    @property
+    def is_acquiring(self) -> bool:
+        return self._acquiring
     
+    @property
+    def frames_acquired(self) -> int:
+        return self._frame_counter
+    
+    @property
+    def config(self) -> CameraConfig:
+        return self._config
+    
+    @property
+    def mode(self) -> CameraMode:
+        return self._config.mode
 
 
     #-------------------
