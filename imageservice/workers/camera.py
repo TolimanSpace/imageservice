@@ -644,3 +644,180 @@ def _select_timing_mode(device_name: bytes) -> str:
         if name_str.startswith(prefix):
             return "XI_ACQ_TIMING_MODE_FRAME_RATE"
     return "XI_ACQ_TIMING_MODE_FRAME_RATE_LIMIT"
+
+
+#-----------------------------------
+# Config factories
+#-----------------------------------
+
+def single_roi_config(
+    width: int,
+    height: int,
+    offset_x: int,
+    offset_y: int,
+    exposure_us: int,
+    frame_rate_hz: float,
+    label: str = "single_roi",
+    serial_number: Optional[str] = None,
+    transport_buffer_size: int = 8,
+) -> CameraConfig:
+    """
+    Convenience function for creating a SINGLE_ROI config
+
+    Example
+    -------
+    >>> cfg = single_roi_config(
+    ...      width=512, height=512,
+    ...      offset_x=1992, offset_y=1992,
+    ...      exposure_us=5_000, frame_rate_hz=10.0,
+    ... )
+    >>> with XimeraCamera(cfg) as cam:
+    ...    frame = cam.acquire_frame()
+    ...    image = frame.rois["single_roi"]   # unit16, 512 x 512
+    """
+    return CameraConfig(
+        serial_number = serial_number,
+        mode = CameraMode.SINGLE_ROI,
+        exposure_us = exposure_us,
+        frame_rate_hz = frame_rate_hz,
+        rois = [RoiDefinition(
+            height = height,
+            offset_y = offset_y,
+            width = width,
+            offset_x = offset_x,
+            label = label,
+            is_data = True,
+        )],
+        transport_buffer_size = transport_buffer_size
+    )
+
+
+def full_frame_config(
+    exposure_us: int,
+    frame_rate_hz: float,
+    serial_number: Optional[str] = None,
+    transport_buffer_size: int = 4,
+) -> CameraConfig:
+    """
+    Convenience function for creating a FULL_FRAME config
+
+    Example
+    -------
+    >>> cfg = full_frame_config(exposure_us=50_000, frame_rate_hz=2.0)
+    >>> with XimeraCamera(cfg) as cam:
+    ...    frame = cam.acquire_frame()
+    ...    image = frame.rois["full_frame"]   # unit16, 4512 x 4512
+    """
+    return CameraConfig(
+        serial_number = serial_number,
+        mode = CameraMode.FULL_FRAME,
+        exposure_us = exposure_us,
+        frame_rate_hz = frame_rate_hz,
+        rois = None,
+        transport_buffer_size = transport_buffer_size,
+    )
+
+def multi_roi_config(
+    rois: List[RoiDefinition],
+    exposure_us: int,
+    frame_rate_hz: float,
+    serial_number: Optional[str] = None,
+    transport_buffer_size: int = 8,
+) -> CameraConfig:
+    """
+    Convenience function for creating a MULTI_ROI configuration.
+
+    The rois list is most conveniently built with the make_rois() helper function,
+    which creates the required 9-element list with the correct pattern (data regions
+    at indices 0, 2, 4, 6, 9; discard regions at 1, 3, 5, 7)
+
+    Parameters
+    ----------
+    rois : List[RoiDefinition]
+        Exactly 9 RoiDefinition objects in region-index order.
+    exposure_us : int
+        Exposure time in microseconds. Must be less than 1_000_000 / frame_rate_hz
+    frame_rate_hz : float
+        Target frame rate in Hz.
+    serial_number : str or None
+        Camera serial number, or None to open the first available device.
+    transport_buffer_size : int
+        Requested Ximea transport buffer depth. Default 8; clamped at runtime to
+        camera's supported range.
+    """
+    return CameraConfig(
+        serial_number = serial_number,
+        mode = CameraMode.MULTI_ROI,
+        exposure_us = exposure_us,
+        frame_rate_hz = frame_rate_hz,
+        rois = rois,
+        transport_buffer_size = transport_buffer_size,
+    )
+
+def make_rois(
+    sensor_width: int = 4512,
+    sensor_height: int = 4512,
+    offset_x: int = 0,
+    offset_y: int = 0,
+    sidelobe_width: int = 512,
+    sidelobe_height: int = 512,
+    core_width: int = 128,
+    core_height: int = 128,
+    full_width: int = 4512,
+    full_height: int = 4512,
+) -> List[RoiDefinition]:
+    """
+    Build a 9-element RoiDefinition list with a "quincunx" (⁙) arrangement.
+
+    The 3x3 grid is:
+        [0] top_left            [1] top_mid (discard)   [2] top_right
+        [3] mid_left (discard)  [4] centre              [5] mid_right (discard)
+        [6] bot_left            [7] bot_mid (discard)   [8] bot_right
+
+    Parameters
+    ----------
+    sensor_width, sensor_height : int
+        Full sensor dimensions in pixels
+    offset_x, offset_y : int
+        Offset in pixels to the top-leftmost pixel of the top_left region
+    sidelobe_width : int
+        The width of the left and right columns in pixels
+    sidelobe_height : int
+        The height of the top and bottom rows in pixels
+    core_width : int
+        The width of the central column in pixels
+    core_height : int
+        The height of the middle row in pixels
+    full_width : int
+        The full width of the pattern in pixels
+    full_height : int
+        The full height of the pattern in pixels
+    
+    """
+
+    if offset_x + full_width > sensor_width:
+        raise ValueError(
+            f"Pattern is expected to be exceed width of sensor ({offset_x + full_width} > {sensor_width})"
+        )
+
+    if offset_y + full_height > sensor_height:
+        raise ValueError(
+            f"Pattern is expected to be exceed height of sensor ({offset_y + full_height} > {sensor_height})"
+        )
+
+    core_x = offset_x + (full_width - core_width) // 2
+    right_x = offset_x + full_width - sidelobe_width
+    core_y = offset_y + (full_height - core_height) // 2
+    bottom_y = offset_y + full_height - sidelobe_height
+
+    return [
+        RoiDefinition(sidelobe_height, offset_y, sidelobe_width, offset_x, "top_left", True),
+        RoiDefinition(sidelobe_height, offset_y, core_width, core_x, "top_mid", False),
+        RoiDefinition(sidelobe_height, offset_y, sidelobe_width, right_x, "top_right", True),
+        RoiDefinition(core_height, core_y, sidelobe_width, offset_x, "mid_left", False),
+        RoiDefinition(core_height, core_y, core_width, core_x, "centre", True),
+        RoiDefinition(core_height, core_y, sidelobe_width, right_x, "mid_right", False),
+        RoiDefinition(sidelobe_height, bottom_y, sidelobe_width, offset_x, "bot_left", True),
+        RoiDefinition(sidelobe_height, bottom_y, core_width, core_x, "bot_mid", False),
+        RoiDefinition(sidelobe_height, bottom_y, sidelobe_width, right_x, "bot_right", True),
+    ]
