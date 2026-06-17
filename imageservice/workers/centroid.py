@@ -30,8 +30,6 @@ class CentroidResult:
     y: float
     total_intensity: float
     peak_value: int
-    n_rows: int
-    n_cols: int
 
 @dataclass(frozen=True)
 class PointingError:
@@ -83,3 +81,79 @@ class PointingError:
 #-----------------------------------
 # Centroid calculation
 #-----------------------------------
+
+def compute_centroid(
+    image: np.ndarray,
+    min_total_intensity: float = 1.0
+) -> Optional[CentroidResult]:
+    """
+    Compute the intensity-weighted centroid of a 2D image array
+
+    Uses the full ROI: every pixel contribues with a weight equal to its
+    intensity value. Result is in ROI-local pixel coordinates.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        2D array of shape (height, width). Expected dtyp is uint16, with
+        12-bit data in a 16-bit container, values in [0, 4095], but any
+        numeric dtype is accepted.
+    min_total_intensity : float
+        Minimum summed intensity to return a result. If the total signal
+        is below this threshold the ROI is considered to have no usable
+        signal and None is returned. The defautl of 1.0 rejects only an
+        all-zero case, but should be increased to a meaninful level in
+        production.
+
+    Returns
+    -------
+    CentroidResult or None
+        None if total intensity is below the min_total_intensity
+
+    Raises
+    ------
+    ValueError
+        If Image is not a 2D array
+
+    Notes
+    -----
+    The weighted centroid formula is computed using 1D reductions rather
+    than a full-meshgrid for efficiency:
+        col_sums = image.sum(axis=0)
+        row_sums = image.sum(axis=1)
+        x = dot(col_indices, col_sums) / total
+        y = dot(row_indices, row_sums) / total
+    """
+    if image.ndim != 2:
+        raise ValueError(
+            f"Image must be 2D, got shape {image.shape}"
+        )
+    
+    n_rows, n_cols = image.shape
+
+    # Float64 to avoid uint16 overflow on large ROI
+    total = image.sum(dtype=np.float64)
+
+    if total < min_total_intensity:
+        logger.debug(
+            "compute_centroid: total intensity %.1f below threshold %.1f.",
+            total, min_total_intensity
+        )
+        return None
+    
+    col_sums = image.sum(axis=0, dtype=np.float64)
+    row_sums = image.sum(axis=1, dtype=np.float64)
+
+    cols = np.arange(n_cols, dtype=np.float64)
+    rows = np.arange(n_rows, dtype=np.float64)
+
+    x = np.dot(cols, col_sums) / total
+    y = np.dot(rows, row_sums) / total
+
+    return CentroidResult(
+        x = x,
+        y = y,
+        total_intensity = total,
+        peak_value = int(image.max())
+    )
+
