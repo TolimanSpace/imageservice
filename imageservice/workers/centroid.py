@@ -77,7 +77,7 @@ class PointingError:
     def as_tuple(self) -> tuple:
         "Return (dx, dy) as a plain tuple"
         return (self.dx, self.dy)
-    
+
 #-----------------------------------
 # Centroid calculation
 #-----------------------------------
@@ -128,7 +128,7 @@ def compute_centroid(
         raise ValueError(
             f"Image must be 2D, got shape {image.shape}"
         )
-    
+
     n_rows, n_cols = image.shape
 
     # Float64 to avoid uint16 overflow on large ROI
@@ -140,7 +140,7 @@ def compute_centroid(
             total, min_total_intensity
         )
         return None
-    
+
     col_sums = image.sum(axis=0, dtype=np.float64)
     row_sums = image.sum(axis=1, dtype=np.float64)
 
@@ -157,3 +157,76 @@ def compute_centroid(
         peak_value = int(image.max())
     )
 
+#-------------------------------
+# Pointing error computation
+#-------------------------------
+
+def compute_pointing_error(
+    centre_roi: np.ndarray,
+    roi_offset_x: int,
+    roi_offset_y: int,
+    sensor_width: int,
+    sensor_height: int,
+    timestamp_ns: int,
+    frame_id: int,
+    min_total_intensity: float = 1.0,
+) -> Optional[PointingError]:
+    """
+    Compute the pointing error from the centre ROI image.
+
+    Combines centroid computation, ROI-to-sensor coordinate conversion, and
+    deviation from sensor centre into a single call suitable for the acquisition loop.
+
+    Parameters
+    ----------
+    centre_roi : np.ndarray
+        2D uint16 array for the centre ROI, as found in AcquiredFrame.rois[CENTRE_ROI_LABEL].
+    roi_offset_x : int
+        x-offset of the centre ROI on the sensor in pixels. From:
+        CameraConfig.rois[4].offset_x (MULTI_ROI) or
+        CameraConfig.rois[0].offset_x (SINGLE_ROI)
+    roi_offset_y : int
+        y-offset of the centre ROI on the sensor in pixels
+    sensor_width : int
+        Full sensor width in pixels. The centre is at sensor_width / 2
+    sensor_height : int
+        Full sensor height in pixels. The centre is at sensor_height / 2
+    timestamp_ns : int
+        Camera hardware timestamp in nanoseconds. From AcquiredFrame.timestamp_ns.
+        Passed through directly without modification
+    frame_id : int
+        Acquisition frame counter. From AcquiredFrame.frame_id.
+        Passed through directly without modificiation
+    min_total_intensity : float
+        Passed through to compute_centroid(), which returns None if the ROI has
+        insufficient signal.
+
+    Returns
+    -------
+    PointingError or None
+        None if the centre ROI has insufficient signal
+    """
+
+    centroid = compute_centroid(centre_roi, min_total_intensity)
+
+    # Insufficient flux
+    if centroid is None:
+        return None
+
+    # Convert ROI-local centroid to sensor coordinators
+    x_sensor = centroid.x + roi_offset_x
+    y_sensor = centroid.y + roi_offset_y
+
+    # Deviation from sensor centre
+    dx = x_sensor - sensor_width / 2.0
+    dy = y_sensor - sensor_height / 2.0
+
+    return PointingError(
+        dx = dx,
+        dy = dy,
+        centroid = centroid,
+        x_sensor = x_sensor,
+        y_sensor = y_sensor,
+        timestamp_ns = timestamp_ns,
+        frame_id = frame_id,
+    )
