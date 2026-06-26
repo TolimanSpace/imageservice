@@ -270,7 +270,7 @@ class XimeaCamera:
             
     """
 
-    MAX_PIXEL_VALUE: int = 4512
+    MAX_PIXEL_VALUE: int = 4095
 
     def __init__(self, config: CameraConfig) -> None:
         self._config = config
@@ -352,7 +352,7 @@ class XimeaCamera:
         # 3. ROI geometry: mode-dependent
         if cfg.mode is CameraMode.MULTI_ROI:
             self._configure_rois()
-        if cfg.mode is CameraMode.SINGLE_ROI:
+        elif cfg.mode is CameraMode.SINGLE_ROI:
             self._configure_single_roi()
         elif cfg.mode is CameraMode.FULL_FRAME:
             self._configure_full_frame()
@@ -498,7 +498,7 @@ class XimeaCamera:
         # Slice into individual ROIs; discard interstitual regions
         if self._config.mode is CameraMode.MULTI_ROI:
             roi_arrays = _parse_roi_strip(strip, self._config.rois)
-        elif self.config.mode is CameraMode.SINGLE_ROI:
+        elif self._config.mode is CameraMode.SINGLE_ROI:
             roi_arrays = {"single_roi": strip}
         else:
             roi_arrays = {"full_frame": strip}
