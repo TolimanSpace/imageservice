@@ -8,6 +8,9 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Label used for the centre ROI in MULTI_ROI mode
+CENTRE_ROI_LABEL: str = "centre"
+
 @dataclass(frozen=True)
 class CentroidResult:
     """

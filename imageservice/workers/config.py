@@ -20,7 +20,7 @@ Typical usage
 -------------
 At startup::
 
-    system = SystemConfig.from_file("/etc/startracker/config.json")
+    system = SystemConfig.from_file("/etc/imageservice/config.json")
 
 At the start of each imaging session::
 
@@ -484,8 +484,8 @@ class SystemConfig:
             },
             "paths": {
                 "_comment": "data_dir and log_dir are required",
-                "data_dir": "/data/startracker",
-                "log_dir": "/var/log/startracker",
+                "data_dir": "/data/imageservice",
+                "log_dir": "/var/log/imageservice",
             },
         }
         with open(path, "w") as f:
