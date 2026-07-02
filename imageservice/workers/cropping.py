@@ -37,25 +37,53 @@ Sidelobe geometry
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 
-#TODO: move this global variable for where the sidelobes are relative to the centre to a place where it can be adjusted
-SIDELOBE_OFFSET = 1625
+# Default values
+# Sidelobe offset - how far the middle of a sidelobe is from its star
+DEFAULT_SIDELOBE_OFFSET = 1625
 
-def crop_centre(image,x_pos,y_pos,size=128):
+# Default strip with in pixels along the perpenticular to the dispersion axis
+DEFAULT_STRIP_WIDTH = 6
+
+# Default strip length in pixels along the dispersion axis
+DEFAULT_STRIP_LENGTH = 360
+
+# Default dispersion axis angle
+DEFAULT_ANGLE_DEGREES = 45
+
+
+#-------------------------------
+# Region of interest crop
+#-------------------------------
+
+def crop_centre(
+    image: np.ndarray,
+    x_pos: float,
+    y_pos: float,
+    size: int=128,
+) -> np.ndarray:
     """
-    Return a sub image centred at (x_pos, y_pos) from an image
+    Return a square sub image centred at (x_pos, y_pos)
 
-    Args:
-        image (numpy.ndarray): ndarray of flux values
-        x_pos (float): X coordinate of the centre point
-        y_pos (float): Y coordinate of the centre point
-        size (int): size of each side of the box (default 128)
+    Parameters
+    ----------
+    image : np.ndarray
+        2-D array of flux values
+    x_pos : float
+        Column coordinater of the centre point
+    y_pos : float
+        Row coordinate of the centre point
+    size : int
+        Side length of the output square in pixels (default 128)
 
-    Returns:
-        cropped (numpy.ndarray): cropped image
+    Returns
+    -------
+    np.ndarray
+        Cropped subimage of shape (size, size) or smaller if
+        requested region extends beyond the image boundary
     """
     # Round positions
     x_pos = round(x_pos)
@@ -68,15 +96,21 @@ def crop_centre(image,x_pos,y_pos,size=128):
     end_x = min(x_pos + half_size + (size % 2), image.shape[1])
     end_y = min(y_pos + half_size + (size % 2), image.shape[0])
 
-    # Extract cutout
-    cropped = image[start_y:end_y, start_x:end_x]
-
-    return cropped
+    return image[start_y:end_y, start_x:end_x]
 
 
-def crop_areas(image, x_poss, y_poss, size = (480, 360)):
+#------------------------------------------
+# Rectangular area crop (internal helper)
+#------------------------------------------
+
+def _crop_areas(
+    image: np.ndarray,
+    x_poss: np.ndarray,
+    y_poss: np.ndarray,
+    size: Tuple[int, int],
+) -> np.ndarray:
     """
-    Return a set of sub images from an image
+    Extract multiple rectangular sub-images from a single image
 
     Args:
         image (numpy.ndarray): ndarray of flux values
@@ -84,9 +118,11 @@ def crop_areas(image, x_poss, y_poss, size = (480, 360)):
         y_poss (list): list of Y coordinates of centre points
         size (tuple): size of each image (default (480, 360))
 
-    Returns:
-        numpy.ndarray: cropped images in a single array
+    Returns
+    -------
+    np.ndarray of shape (n_positions, height, width)
     """
+    h, w = size
 
     output = []
 
@@ -96,12 +132,11 @@ def crop_areas(image, x_poss, y_poss, size = (480, 360)):
         y_pos = round(y_pos)
 
         # Calculate dimensions of the cutout
-        half_size_x = size[1] // 2
-        half_size_y = size[0] // 2
-        start_x = max(x_pos - half_size_x, 0)
-        start_y = max(y_pos - half_size_y, 0)
-        end_x = min(x_pos + half_size_x + (size[1] % 2), image.shape[1])
-        end_y = min(y_pos + half_size_y + (size[0] % 2), image.shape[0])
+        hx, hy = w //2, h //2
+        start_x = max(x_pos - hx, 0)
+        start_y = max(y_pos - hy, 0)
+        end_x = min(x_pos + hx + (w % 2), image.shape[1])
+        end_y = min(y_pos + hy + (h % 2), image.shape[0])
 
         # Extract cutout
         output.append(image[start_y:end_y, start_x:end_x])
@@ -137,8 +172,8 @@ def crop_sidelobes_old(image, x_poss, y_poss, angle_degrees = 45, width = 6, len
         x = x - x_pos
 
         for angle in angles_radians:
-            sidelobe_x = np.abs(SIDELOBE_OFFSET * np.cos(angle))
-            sidelobe_y = np.abs(SIDELOBE_OFFSET * np.sin(angle))
+            sidelobe_x = np.abs(DEFAULT_SIDELOBE_OFFSET * np.cos(angle))
+            sidelobe_y = np.abs(DEFAULT_SIDELOBE_OFFSET * np.sin(angle))
 
             if np.abs(angle-np.pi/2) <= np.pi/4:
                 mask = (np.abs(x - y / np.tan(angle)) <= width/2) & (np.abs(np.abs(y)-sidelobe_y) <= length/2)
@@ -151,7 +186,16 @@ def crop_sidelobes_old(image, x_poss, y_poss, angle_degrees = 45, width = 6, len
 
     return result
 
-def crop_sidelobes(image, x_poss, y_poss, centroid_data, angle_degrees = 45, width = 6, length=360):
+def crop_sidelobes(
+    image: np.ndarray,
+    x_poss: List[float],
+    y_poss: List[float],
+    centroid_data: Dict[int, float],
+    sidelobe_offset: int = DEFAULT_SIDELOBE_OFFSET,
+    angle_degrees: int = DEFAULT_ANGLE_DEGREES,
+    width: int = DEFAULT_STRIP_WIDTH,
+    length: int = DEFAULT_STRIP_LENGTH,
+) -> Optional[np.ndarray]:
     """
     Return a sub image of sidelobes for centred at (x_poss, y_poss) from an image
 
@@ -170,28 +214,33 @@ def crop_sidelobes(image, x_poss, y_poss, centroid_data, angle_degrees = 45, wid
         numpy.ndarray: crops around each sidelobe combined into a single rectangular array of size width x 8*length
     """
 
-    angles_radians = np.array([np.deg2rad(angle_degrees), np.deg2rad(angle_degrees+90)])
+    angles_rad = np.array([
+        np.deg2rad(angle_degrees),
+        np.deg2rad(angle_degrees+90.0)
+    ])
 
-    sidelobes_x = (SIDELOBE_OFFSET * np.cos(angles_radians)).astype(int)
-    sidelobes_y = (SIDELOBE_OFFSET * np.sin(angles_radians)).astype(int)
+    # Four arm directions: +45, +135, -45, -135
+    sl_x = (sidelobe_offset * np.cos(angles_rad)).astype(int)
+    sl_y = (sidelobe_offset * np.sin(angles_rad)).astype(int)
+    sl_x = np.concatenate((sl_x, - sl_x))
+    sl_y = np.concatenate((sl_y, - sl_y))
+    angles_rad_4 = np.concatenate((angles_rad, angles_rad))
 
-    sidelobes_x = np.concatenate((sidelobes_x, - sidelobes_x))
-    sidelobes_y = np.concatenate((sidelobes_y, - sidelobes_y))
-    angles_radians = np.concatenate((angles_radians, angles_radians))
+    # Build coordinate grids
+    y_grid, x_grid = np.indices(image.shape)
 
-    y, x = np.indices(image.shape)
-    yy = (y - np.broadcast_to(y_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
-    xx = (x - np.broadcast_to(x_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
+    yy = (y_grid - np.broadcast_to(y_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
+    xx = (x_grid - np.broadcast_to(x_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
 
-    crop_im = crop_areas(image, centroid_data['x'] + sidelobes_x, centroid_data['y'] + sidelobes_y)
-    crop_x = crop_areas(xx, centroid_data['x'] + sidelobes_x, centroid_data['y'] + sidelobes_y)
-    crop_y = crop_areas(yy, centroid_data['x'] + sidelobes_x, centroid_data['y'] + sidelobes_y)
+    crop_im = _crop_areas(image, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y)
+    crop_x = _crop_areas(xx, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y)
+    crop_y = _crop_areas(yy, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y)
 
     crop_im = np.transpose(crop_im, axes=(1,2,0))
     crop_x = np.transpose(crop_x, axes=(1,2,3,0))
     crop_y = np.transpose(crop_y, axes=(1,2,3,0))
 
-    tan = np.tan(angles_radians)
+    tan = np.tan(angles_rad)
     cot = 1/tan
 
     mask = np.abs(crop_x - crop_y*cot) <= width/2
