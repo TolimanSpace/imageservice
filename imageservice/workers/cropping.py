@@ -41,7 +41,7 @@ from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Default values
 # Sidelobe offset - how far the middle of a sidelobe is from its star
@@ -266,7 +266,7 @@ def crop_sidelobes(
     image: np.ndarray,
     x_poss: List[float],
     y_poss: List[float],
-    centroid_data: Dict[int, float],
+    centroid_data: Dict[str, float],
     sidelobe_offset: int = DEFAULT_SIDELOBE_OFFSET,
     angle_degrees: float = 45.0,
     width: int = DEFAULT_STRIP_WIDTH,
@@ -295,6 +295,8 @@ def crop_sidelobes(
         np.deg2rad(angle_degrees+90.0)
     ])
 
+    size=(480, 360)
+
     # Four arm directions: +45, +135, -45, -135
     sl_x = (sidelobe_offset * np.cos(angles_rad)).astype(int)
     sl_y = (sidelobe_offset * np.sin(angles_rad)).astype(int)
@@ -308,9 +310,9 @@ def crop_sidelobes(
     yy = (y_grid - np.broadcast_to(y_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
     xx = (x_grid - np.broadcast_to(x_poss, (*image.shape, 2)).transpose((2,0,1))).transpose((1,2,0))
 
-    crop_im = _crop_areas(image, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y)
-    crop_x = _crop_areas(xx, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y)
-    crop_y = _crop_areas(yy, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y)
+    crop_im = _crop_areas(image, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y, size)
+    crop_x = _crop_areas(xx, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y, size)
+    crop_y = _crop_areas(yy, centroid_data['x'] + sl_x, centroid_data['y'] + sl_y, size)
 
     crop_im = np.transpose(crop_im, axes=(1,2,0))
     crop_x = np.transpose(crop_x, axes=(1,2,3,0))
