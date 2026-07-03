@@ -5,7 +5,7 @@ tests/unit/test_star_finder.py - Unit tests for startracker.star_finder
 import pytest
 import numpy as np
 
-from startracker.star_finder import (
+from workers.star_finder import (
     deconvolve_image,
     find_stars,
     load_deconvolution_kernel,

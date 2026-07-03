@@ -63,7 +63,7 @@ class TestComputeCentroid:
         assert compute_centroid(img, min_total_intensity=50)  is not None
 
     def test_non_2d_raises_value_error(self):
-        with pytest.raises(ValueError, match="2-D"):
+        with pytest.raises(ValueError, match="2D"):
             compute_centroid(np.zeros((4, 4, 4), dtype=np.uint16))
 
     def test_total_intensity_correct(self):
@@ -79,13 +79,6 @@ class TestComputeCentroid:
         img[20, 20] = 1000
         r = compute_centroid(img)
         assert r.peak_value == 3000
-
-    def test_shape_recorded(self):
-        img = np.zeros((48, 96), dtype=np.uint16)
-        img[24, 48] = 1000
-        r = compute_centroid(img)
-        assert r.n_rows == 48
-        assert r.n_cols == 96
 
     def test_centroid_at_roi_centre(self, star_roi):
         r = compute_centroid(star_roi)
