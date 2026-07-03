@@ -1,5 +1,5 @@
 """
-tests/unit/test_centroid.py — Unit tests for startracker.centroid
+tests/unit/test_centroid.py - Unit tests for startracker.centroid
 """
 
 import pytest
@@ -48,7 +48,7 @@ class TestComputeCentroid:
     def test_weighted_centroid_pulled_toward_brighter_pixel(self):
         img = np.zeros((64, 64), dtype=np.uint16)
         img[32, 20] = 100
-        img[32, 40] = 300   # 3x brighter — centroid should be closer to 40
+        img[32, 40] = 300   # 3x brighter - centroid should be closer to 40
         r = compute_centroid(img)
         # Weighted mean: (20*100 + 40*300) / 400 = 35.0
         assert abs(r.x - 35.0) < 1e-9
@@ -90,7 +90,7 @@ class TestComputeCentroid:
     def test_centroid_at_roi_centre(self, star_roi):
         r = compute_centroid(star_roi)
         assert r is not None
-        # Gaussian centred at (ROI_H//2, ROI_W//2) — within 1 pixel
+        # Gaussian centred at (ROI_H//2, ROI_W//2) - within 1 pixel
         assert abs(r.x - ROI_W // 2) < 1.0
         assert abs(r.y - ROI_H // 2) < 1.0
 

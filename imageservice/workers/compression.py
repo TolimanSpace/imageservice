@@ -1,5 +1,5 @@
 """
-compressor.py — Post-session compression pipeline.
+compressor.py - Post-session compression pipeline.
 
 Reads the raw .bin and .jsonl files written by FrameWriter, processes
 them in batches of N frames, and produces netCDF4 files for downlink.
@@ -11,16 +11,16 @@ For each batch of N frames:
   1. Load N centre ROI frames and N frames per corner ROI from .bin files,
      guided by the .jsonl metadata file.
 
-  2. Star finding — deconvolve each centre ROI frame and detect the
+  2. Star finding - deconvolve each centre ROI frame and detect the
      positions of the two stars (find_stars() from star_finder.py).
 
-  3. Coordinate transform — convert star positions from centre ROI-local
+  3. Coordinate transform - convert star positions from centre ROI-local
      to sensor coordinates, then to each corner ROI's local coordinates.
 
-  4. Sidelobe crop — run crop_and_merge_corners() on each corner ROI frame using
+  4. Sidelobe crop - run crop_and_merge_corners() on each corner ROI frame using
      the transformed star positions, producing one merged strip per frame.
 
-  5. Difference images — compute frame[i] - frame[i-1] for i in 1..N-1,
+  5. Difference images - compute frame[i] - frame[i-1] for i in 1..N-1,
      for both the centre ROI stack and the sidelobe strip stack.
 
   6. Adaptive bit reduction:
@@ -30,7 +30,7 @@ For each batch of N frames:
        - The dtype chosen and any scale factor are recorded as netCDF
          variable attributes so the data can be reconstructed exactly.
 
-  7. netCDF bundle — write one .nc file per batch containing:
+  7. netCDF bundle - write one .nc file per batch containing:
        Centre ROI:     reference frame (uint16) + N-1 difference frames
        Sidelobe strip: reference frame (uint16) + N-1 difference frames
        Metadata:       per-frame timestamps, frame IDs, star positions,
@@ -82,7 +82,7 @@ from camera import CameraMode
 
 logger = logging.getLogger(__name__)
 
-# Maximum value for 12-bit data — used for int8 range check
+# Maximum value for 12-bit data - used for int8 range check
 _MAX_12BIT: int = 4095
 _INT8_MAX:  int = 127
 
@@ -178,7 +178,7 @@ def compress_session(
 
     kernel = load_deconvolution_kernel(params.kernel_path)
 
-    # Load metadata (shared across all ROIs — use centre ROI meta file)
+    # Load metadata (shared across all ROIs - use centre ROI meta file)
     meta_path = _meta_path(system.data_dir, params.session_id,
                            params.centre_roi_label)
     metadata = _load_metadata(meta_path)
@@ -200,7 +200,7 @@ def compress_session(
     for label in params.corner_roi_labels:
         shape = _corner_roi_shape(system, session, label)
         if shape is None:
-            logger.warning("No shape found for corner ROI '%s' — skipping.", label)
+            logger.warning("No shape found for corner ROI '%s' - skipping.", label)
             continue
         corner_stacks[label] = _load_frame_stack(
             system.data_dir, params.session_id,
@@ -381,7 +381,7 @@ def _make_diffs(
     diffs : np.ndarray
         Shape (N-1, H, W). dtype is int8 or int16.
     dtype_name : str
-        "int8" or "int16" — recorded in netCDF metadata.
+        "int8" or "int16" - recorded in netCDF metadata.
     scale : float
         Scale factor applied before casting to int8, or 1.0 for int16.
         To reconstruct: original_diff = stored_value * scale.
@@ -395,12 +395,12 @@ def _make_diffs(
     diff_range = max(abs(diff_min), abs(diff_max))
 
     if diff_range <= _INT8_MAX:
-        # Diffs fit in int8 without scaling — lossless
+        # Diffs fit in int8 without scaling - lossless
         return diffs_i32.astype(np.int8), "int8", 1.0
     else:
-        # Store as int16 — fits full 12-bit difference range (±4095) losslessly
+        # Store as int16 - fits full 12-bit difference range (±4095) losslessly
         logger.debug(
-            "Diff range ±%d exceeds int8 — storing as int16.", diff_range
+            "Diff range ±%d exceeds int8 - storing as int16.", diff_range
         )
         return diffs_i32.astype(np.int16), "int16", 1.0
 
@@ -509,7 +509,7 @@ def _write_netcdf(
 
 
 def system_deflate(params: CompressionParams) -> int:
-    """Return deflate level — extracted here to allow easy override in tests."""
+    """Return deflate level - extracted here to allow easy override in tests."""
     return 5   # default; could be passed via CompressionParams if needed
 
 

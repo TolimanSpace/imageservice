@@ -1,16 +1,16 @@
 """
-config.py — Configuration management for the image acquisition system.
+config.py - Configuration management for the image acquisition system.
 
 Two configuration layers are provided:
 
-  SystemConfig   — Static hardware and infrastructure parameters loaded from
+  SystemConfig   - Static hardware and infrastructure parameters loaded from
                    a JSON file at startup. Covers only things that are fixed
                    for the lifetime of the instrument: camera serial number,
                    sensor dimensions, file paths, and pipeline tuning.
                    Does not include camera mode or ROI geometry, which vary
                    between imaging sessions.
 
-  SessionConfig  — All per-session operational parameters, supplied
+  SessionConfig  - All per-session operational parameters, supplied
                    programmatically at the start of each imaging session
                    (e.g. from a ground command or script). Includes camera
                    mode, ROI geometry, frame rate, exposure, and session
@@ -64,7 +64,7 @@ ROI geometry
 ------------
 config.py imports RoiDefinition and make_rois() from camera.py.
 SessionConfig holds ROI geometry directly as List[RoiDefinition], so
-there is no parallel ROI type hierarchy — camera.py types are the
+there is no parallel ROI type hierarchy - camera.py types are the
 single source of truth.
 
 JSON file structure
@@ -119,7 +119,7 @@ class SystemConfig:
     Static hardware and infrastructure configuration loaded from a JSON file.
 
     Contains only parameters that are fixed for the lifetime of the instrument.
-    Camera mode and ROI geometry are NOT here — they belong in SessionConfig
+    Camera mode and ROI geometry are NOT here - they belong in SessionConfig
     since they vary between imaging sessions.
 
     Required JSON fields:
@@ -277,7 +277,7 @@ class SystemConfig:
         is preserved as <path>.bak.
 
         This ensures the system is never left with a half-written or invalid
-        config file — if the write or validation fails the original is
+        config file - if the write or validation fails the original is
         untouched.
 
         Parameters
@@ -502,7 +502,7 @@ class SessionConfig:
     """
     Per-session operational parameters, supplied programmatically.
 
-    Not stored in the JSON file — these are commanded at the start of each
+    Not stored in the JSON file - these are commanded at the start of each
     imaging session.
 
     Session termination
@@ -569,7 +569,7 @@ class SessionConfig:
             )
         if self.n_frames is None and self.duration_s is None:
             logger.warning(
-                "SessionConfig: both n_frames and duration_s are None — "
+                "SessionConfig: both n_frames and duration_s are None - "
                 "session will run until stop() is called."
             )
         if not self.session_id:
@@ -684,5 +684,5 @@ def _warn_extra_keys(d: dict, known: List[str], section: str) -> None:
     for key in d:
         if key not in known and not key.startswith("_"):
             logger.warning(
-                "Unknown key '%s.%s' in config — ignored.", section, key
+                "Unknown key '%s.%s' in config - ignored.", section, key
             )

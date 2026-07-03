@@ -1,5 +1,5 @@
 """
-tests/unit/test_roi_crop.py — Unit tests for startracker.roi_crop
+tests/unit/test_roi_crop.py - Unit tests for startracker.roi_crop
 """
 
 import pytest
@@ -57,7 +57,7 @@ class TestCropSidelobeStrip:
     Tests for crop_sidelobe_strip().
 
     In the multi-ROI architecture each corner ROI is already centred on
-    one sidelobe arm — no crop_areas step is needed. The star position
+    one sidelobe arm - no crop_areas step is needed. The star position
     is expressed in corner ROI-local coordinates; since the star lives
     in the centre ROI (~SIDELOBE_OFFSET pixels away), x_star and y_star
     are typically large negative values.
@@ -99,7 +99,7 @@ class TestCropSidelobeStrip:
         A strip at 135° should not capture the 45° diagonal.
         The new binning approach discards incomplete cross-sections, so
         a perpendicular strip across a thin diagonal typically returns
-        zero complete rows — all bins have fewer pixels than width.
+        zero complete rows - all bins have fewer pixels than width.
         """
         strip = crop_sidelobe_strip(diagonal_roi, 0.0, 0.0,
                                      angle_degrees=135.0, width=2)
@@ -232,7 +232,7 @@ class TestCropAndMergeCorners:
         custom = {k: 90.0 for k in four_corners}
         result = crop_and_merge_corners(four_corners, one_star_positions,
                                          corner_angles=custom, width=6)
-        # A 90° axis is vertical — may or may not yield strips depending
+        # A 90° axis is vertical - may or may not yield strips depending
         # on geometry, but must not raise.
         assert result is None or isinstance(result, np.ndarray)
 

@@ -1,5 +1,5 @@
 """
-writer.py — Asynchronous frame writer with in-memory ring buffer.
+writer.py - Asynchronous frame writer with in-memory ring buffer.
 
 Decouples the time-critical acquisition loop from disk I/O by buffering
 frames in a fixed-size in-memory ring buffer and draining it in a
@@ -174,7 +174,7 @@ class FrameWriter:
             (buffer_n_frames, n_rows, n_cols), dtype=np.uint16
         )
 
-        # Parallel metadata buffer — one dict slot per frame slot
+        # Parallel metadata buffer - one dict slot per frame slot
         self._meta_buffer: list = [None] * buffer_n_frames
 
         # Ring buffer indices (protected by _lock)
@@ -259,7 +259,7 @@ class FrameWriter:
         if self._thread is None:
             return
 
-        logger.info("FrameWriter stopping — waiting for buffer to drain...")
+        logger.info("FrameWriter stopping - waiting for buffer to drain...")
         self._stop_event.set()
         self._data_available.set()   # wake the thread if it's waiting
         self._thread.join(timeout=self._flush_timeout)
@@ -267,7 +267,7 @@ class FrameWriter:
         if self._thread.is_alive():
             remaining = self._occupancy
             logger.warning(
-                "FrameWriter flush timeout (%.1f s) — "
+                "FrameWriter flush timeout (%.1f s) - "
                 "%d frame(s) in buffer were not written.",
                 self._flush_timeout, remaining,
             )
@@ -331,11 +331,11 @@ class FrameWriter:
             slot = self._write_idx % self._buffer_n
 
             if self._occupancy == self._buffer_n:
-                # Buffer full — overwrite oldest slot, advance read index
+                # Buffer full - overwrite oldest slot, advance read index
                 self._frames_dropped += 1
                 self._read_idx = (self._read_idx + 1) % self._buffer_n
                 logger.warning(
-                    "Ring buffer full — oldest frame dropped "
+                    "Ring buffer full - oldest frame dropped "
                     "(total dropped: %d).", self._frames_dropped
                 )
             else:
@@ -404,7 +404,7 @@ class FrameWriter:
                     if self._occupancy == 0:
                         break
                     slot = self._read_idx % self._buffer_n
-                    # Take a view of the slot (no copy needed — writer thread
+                    # Take a view of the slot (no copy needed - writer thread
                     # owns this slot until read_idx advances)
                     frame_view = self._buffer[slot]
                     meta       = self._meta_buffer[slot]

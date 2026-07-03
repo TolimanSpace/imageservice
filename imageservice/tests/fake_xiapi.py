@@ -1,5 +1,5 @@
 """
-fake_xiapi.py — Fake implementation of the Ximea xiapi module.
+fake_xiapi.py - Fake implementation of the Ximea xiapi module.
 
 Provides FakeCamera, FakeImage, and FakeXiapi, which together replace
 the real ximea.xiapi C extension in tests. The fake:
@@ -69,7 +69,7 @@ class FakeImage:
     def get_image_data_numpy(self) -> np.ndarray:
         if self._data is None:
             raise RuntimeError(
-                "FakeImage has no data — call set_data() before acquire_frame()."
+                "FakeImage has no data - call set_data() before acquire_frame()."
             )
         return self._data
 
@@ -228,7 +228,7 @@ class FakeCamera:
 
 
 # ---------------------------------------------------------------------------
-# FakeXiapi — top-level module replacement
+# FakeXiapi - top-level module replacement
 # ---------------------------------------------------------------------------
 
 class FakeXiapi:

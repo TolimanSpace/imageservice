@@ -1,5 +1,5 @@
 """
-star_finder.py — Star detection in the centre ROI via deconvolution.
+star_finder.py - Star detection in the centre ROI via deconvolution.
 
 Provides find_stars(), which deconvolves the centre ROI image using a
 pre-computed kernel and returns the pixel coordinates of the N brightest 
@@ -16,7 +16,7 @@ pointwise multiplication in the frequency domain:
 
 The kernel file path is supplied via SystemConfig (or passed directly
 to load_deconvolution_kernel()). The kernel must match the shape of
-the centre ROI exactly — if the ROI size changes, a new kernel is
+the centre ROI exactly - if the ROI size changes, a new kernel is
 needed.
 
 The kernel is loaded once at the start of a compression session and
@@ -172,8 +172,8 @@ def find_stars(
     Returns
     -------
     dict with keys:
-        "xs" : List[float]  — column coordinates (ROI-local)
-        "ys" : List[float]  — row coordinates (ROI-local)
+        "xs" : List[float]  - column coordinates (ROI-local)
+        "ys" : List[float]  - row coordinates (ROI-local)
 
     If fewer than n_stars candidates are found, the returned lists will
     be shorter than n_stars. The caller should handle this case.
@@ -194,7 +194,7 @@ def find_stars(
 
     local_max = deconvolved == maximum_filter(deconvolved, size=filter_size)
     thresh_mask = deconvolved > threshold * peak
-    candidates = np.argwhere(local_max & thresh_mask)   # shape (N, 2) — (row, col)
+    candidates = np.argwhere(local_max & thresh_mask)   # shape (N, 2) - (row, col)
 
     if len(candidates) == 0:
         logger.warning(

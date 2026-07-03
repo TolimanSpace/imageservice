@@ -1,5 +1,5 @@
 """
-acquisition.py — Main acquisition loop for the Toliman imaging system.
+acquisition.py - Main acquisition loop for the Toliman imaging system.
 
 Runs as a dedicated process (via multiprocessing) to isolate the time-critical
 acquisition loop from other system processes and allow real-time scheduling
@@ -10,10 +10,10 @@ Architecture
 The acquisition loop owns a single XimeaCamera and drives it at the
 configured frame rate. On each frame:
 
-  1. acquire_frame()        — blocking call to the Ximea driver
-  2. compute_pointing_error() — centroid of the centre ROI
-  3. publish_pointing_error() — send (dx, dy, timestamp) to serial port (stubbed)
-  4. push to FrameWriter(s)  — one writer per data-bearing ROI
+  1. acquire_frame()        - blocking call to the Ximea driver
+  2. compute_pointing_error() - centroid of the centre ROI
+  3. publish_pointing_error() - send (dx, dy, timestamp) to serial port (stubbed)
+  4. push to FrameWriter(s)  - one writer per data-bearing ROI
 
 The loop runs until one of:
   - n_frames frames have been acquired   (if SessionConfig.n_frames is set)
@@ -25,11 +25,11 @@ Error handling
 --------------
 Camera errors are classified into two tiers:
 
-  Transient  — a single get_image() timeout or transport error. The loop
+  Transient  - a single get_image() timeout or transport error. The loop
                skips the frame, increments a consecutive-error counter, and
                continues. Likely causes: SET-induced SEFI, USB glitch.
 
-  Persistent — MAX_CONSECUTIVE_ERRORS consecutive transient errors, or a
+  Persistent - MAX_CONSECUTIVE_ERRORS consecutive transient errors, or a
                single error that occurs during camera reconfiguration.
                The loop attempts one full camera close/reopen cycle. If the
                camera comes back, acquisition resumes from the next frame.
@@ -46,7 +46,7 @@ diagnostic code paths are skipped entirely.
 The diagnostics array is returned in the result dict and can be saved or
 analysed after the session.
 
-IPC — serial publisher
+IPC - serial publisher
 ----------------------
 The serial publisher (pointing error → serial port → pointing controller)
 is stubbed here as _publish_pointing_error(). This will be implemented in
@@ -303,7 +303,7 @@ def _run(
                     )
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                         logger.error(
-                            "Reached %d consecutive errors — attempting "
+                            "Reached %d consecutive errors - attempting "
                             "camera reconnect.", MAX_CONSECUTIVE_ERRORS,
                         )
                         recovered, n_reconnects = _attempt_reconnect(
@@ -315,7 +315,7 @@ def _run(
                                 f"Camera unrecoverable after "
                                 f"{n_reconnects} reconnect attempt(s). "
                                 f"Last error: {e}. "
-                                f"Possible SEL — OBC power cycle required."
+                                f"Possible SEL - OBC power cycle required."
                             )
                             logger.critical(fault_message)
                             raise CameraFaultError(fault_message)
@@ -544,7 +544,7 @@ def _publish_pointing_error(pointing: PointingError) -> None:
     """
     Publish a PointingError to the pointing controller via serial port.
 
-    STUB — to be implemented in serial_publisher.py once the framing
+    STUB - to be implemented in serial_publisher.py once the framing
     protocol is agreed with the pointing controller team.
 
     When implemented this will open/reuse a serial.Serial handle and
@@ -564,10 +564,10 @@ def _publish_no_signal(frame_id: int, timestamp_ns: int) -> None:
     """
     Publish a sentinel to the pointing controller indicating no signal.
 
-    STUB — to be implemented alongside _publish_pointing_error().
+    STUB - to be implemented alongside _publish_pointing_error().
 
     The sentinel should be a distinguished packet value that the pointing
-    controller recognises as "star not detected — hold last good pointing".
+    controller recognises as "star not detected - hold last good pointing".
     """
     logger.debug(
         "POINTING: frame_id=%d  ts=%d  NO SIGNAL",
@@ -584,7 +584,7 @@ def _try_set_realtime_priority() -> None:
     Attempt to set SCHED_FIFO real-time scheduling for this process.
 
     Requires CAP_SYS_NICE or root. Logs a warning if not permitted rather
-    than raising — the acquisition loop will still function, but with
+    than raising - the acquisition loop will still function, but with
     normal scheduler jitter.
     """
     try:
@@ -609,7 +609,7 @@ def _configure_logging(log_dir: str, session_id: str) -> None:
     log_path = os.path.join(log_dir, f"{session_id}_acquisition.log")
     handler = logging.FileHandler(log_path)
     handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
+        "%(asctime)s %(levelname)-8s %(name)s - %(message)s"
     ))
     logging.getLogger().addHandler(handler)
     logging.getLogger().setLevel(logging.DEBUG)

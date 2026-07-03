@@ -1,5 +1,5 @@
 """
-tests/unit/test_config.py — Unit tests for startracker.config
+tests/unit/test_config.py - Unit tests for startracker.config
 """
 
 import dataclasses
@@ -89,7 +89,7 @@ class TestSystemConfigLoading:
 
 
 # ---------------------------------------------------------------------------
-# SystemConfig.save() — atomic write with backup
+# SystemConfig.save() - atomic write with backup
 # ---------------------------------------------------------------------------
 
 class TestSystemConfigSave:
@@ -104,7 +104,7 @@ class TestSystemConfigSave:
     def test_save_creates_backup(self, system_config, tmp_path):
         out = tmp_path / "config.json"
         system_config.save(str(out))
-        # Save again — original should be backed up
+        # Save again - original should be backed up
         new_cfg = dataclasses.replace(
             system_config, camera_serial_number="NEWSN"
         )

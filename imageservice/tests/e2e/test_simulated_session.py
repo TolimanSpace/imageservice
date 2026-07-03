@@ -51,7 +51,7 @@ def _make_star_roi(seed: int = 42) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# E2E: manual pipeline (no multiprocessing — easier to debug)
+# E2E: manual pipeline (no multiprocessing - easier to debug)
 # ---------------------------------------------------------------------------
 
 class TestSimulatedSession:
@@ -151,7 +151,7 @@ class TestSimulatedSession:
         self, system_config, session_config_single, fake_xiapi, tmp_data_dir
     ):
         """
-        Inject 3 consecutive errors — within MAX_CONSECUTIVE_ERRORS (5).
+        Inject 3 consecutive errors - within MAX_CONSECUTIVE_ERRORS (5).
         Session should continue and recover automatically.
         """
         star_roi = _make_star_roi()

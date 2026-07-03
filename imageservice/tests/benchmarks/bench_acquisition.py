@@ -3,7 +3,7 @@ tests/benchmarks/bench_acquisition.py
 Benchmarks for the acquisition loop hot path components.
 
 These measure the per-frame overhead of parse_roi_strip, frame copy,
-and writer.push — the operations that must complete within the frame budget.
+and writer.push - the operations that must complete within the frame budget.
 """
 
 import numpy as np
@@ -49,7 +49,7 @@ class TestAcquisitionBenchmarks:
     def test_bench_strip_copy(self, benchmark, synthetic_strip_9roi):
         """
         Benchmark: np.ndarray.copy() on the full strip.
-        This is the defensive copy in acquire_frame() — its cost is a floor
+        This is the defensive copy in acquire_frame() - its cost is a floor
         for acquisition latency regardless of what else happens.
         """
         strip, _ = synthetic_strip_9roi
@@ -57,7 +57,7 @@ class TestAcquisitionBenchmarks:
 
     def test_bench_writer_push(self, benchmark, tmp_path, star_roi):
         """
-        Benchmark: FrameWriter.push() — the call made from the hot path.
+        Benchmark: FrameWriter.push() - the call made from the hot path.
         Measures lock contention + np.copyto() cost.
         """
         import time

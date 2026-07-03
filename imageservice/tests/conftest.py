@@ -1,13 +1,13 @@
 """
-conftest.py — Shared pytest fixtures.
+conftest.py - Shared pytest fixtures.
 
 Available to all tests via automatic fixture injection. Organised into:
 
-  Infrastructure   — FakeXiapi, tmp directories
-  Camera configs   — pre-built CameraConfig objects for each mode
-  System/Session   — SystemConfig and SessionConfig instances
-  Image data       — synthetic ROI arrays, frame stacks
-  Writers          — pre-started FrameWriter instances
+  Infrastructure   - FakeXiapi, tmp directories
+  Camera configs   - pre-built CameraConfig objects for each mode
+  System/Session   - SystemConfig and SessionConfig instances
+  Image data       - synthetic ROI arrays, frame stacks
+  Writers          - pre-started FrameWriter instances
 """
 
 from __future__ import annotations
