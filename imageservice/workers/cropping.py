@@ -41,6 +41,8 @@ from typing import List, Optional, Tuple, Dict
 
 import numpy as np
 
+logger = logging.get_logger(__name__)
+
 # Default values
 # Sidelobe offset - how far the middle of a sidelobe is from its star
 DEFAULT_SIDELOBE_OFFSET = 1625
@@ -52,7 +54,12 @@ DEFAULT_STRIP_WIDTH = 6
 DEFAULT_STRIP_LENGTH = 360
 
 # Default dispersion axis angle
-DEFAULT_ANGLE_DEGREES = 45
+DEFAULT_ANGLE_DEGREES: Dict[str, float] = {
+    "top_left": 135.0,
+    "top_right": 45.0,
+    "bot_left": 45.0,
+    "bot_right": 135.0
+}
 
 
 #-------------------------------
@@ -143,6 +150,117 @@ def _crop_areas(
 
     return np.asarray(output)
 
+#-----------------------
+# Sidelobe cropping
+#-----------------------
+
+def crop_sidelobe_strip(
+    image: np.ndarray,
+    x_star: float,
+    y_star: float,
+    angle_degrees: float,
+    width: int = DEFAULT_STRIP_WIDTH,
+) -> np.ndarray:
+    """
+    Extract a narrow strip along the dispersion axis in a corner region of interest
+
+    The mask selects all pixels within width/2 perpendicular pixels of the line
+    through (x_star, y_star) at angle_degrees:
+
+        |(x-x_star)*sin(angle_degrees) - (y-y_star)*cos(angle_degrees)| <= width/2
+
+    Parameters
+    ----------
+    image : np.ndarray
+        2-D uint16 corner region of interest array
+    x_star : float
+        Star column position in local image coordinates
+    y_star : float
+        Star row position in local image coordinates
+    angle_degrees : float
+        Dispersion axis angle from the column axis in degrees.
+    width : int
+        Strip width in pixels (perpendicular to dispersion axis)
+    """
+    angle_rad = np.deg2rad(angle_degrees)
+    cot_a = 1.0 / np.tan(angle_rad)
+
+    y_grid, x_grid = np.indices(image.shape)
+    xx = x_grid - x_star
+    yy = y_grid - y_star
+
+    mask = np.abxs(xx - yy * cot_a) <= width / 2.0
+
+    if not mask.any():
+        return np.empty((0,width), dtype=image.dtype)
+
+    # Find image columns with exactly 'width' masked pixels
+    col_counts = mask.sum(axis=0)
+    complete_cols = np.where(col_counts == width)[0]
+
+    if complete_cols.size == 0:
+        return np.empty((0,width), dtype=image.dtype)
+
+    # Extract masked pixels for complete cols
+    sub_mask = mask[:, complete_cols]
+    sub_image = image[:, complete_cols]
+
+    pixels_col_major = sub_image.flatten(order='F')
+    mask_col_major = sub_mask.flatten(order='F')
+
+    return pixels_col_major[mask_col_major].reshape(len(complete_cols), width)
+
+
+def crop_and_merge_corners(
+    corner_rois: Dict[str, np.ndarray],
+    star_positions_per_corner: Dict[str, Dict[str, List[float]]],
+    corner_angles: Optional[Dict[str, float]] = None,
+    width: int = DEFAULT_STRIP_WIDTH,
+) -> Optional[np.ndarray]:
+    """
+    Extract strips from all corner regions of interest for all stars and merge
+
+    For a two-star system with four corner regions of interest, this produces
+    eight strips, merged horizontally into a single array.
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    np.ndarray
+    """
+    angles = corner_angles if corner_angles is not None else DEFAULT_ANGLE_DEGREES
+
+    strips = []
+
+    for label, roi in corner_rois.items():
+        angle_deg = angles.get(label, 45.0)
+        stars = star_positions_per_corner.get(label, {"xs": [], "ys": []})
+        for x_s, y_s in zip(stars["xs"], stars["ys"]):
+            strip = crop_sidelobe_strip(
+                roi, x_s, y_s,
+                angle_degrees = angle_deg,
+                width = width
+            )
+            if strip.shape[0] > 0:
+                strips.append(strip)
+            else:
+                logger.warning(
+                    "crop_and_merge_corners: empty strip for label=%s "
+                    "star=(%.1f, %.1f).", label, x_s, y_s,
+                )
+
+    if not strips:
+        logger.warning("crop_and_merge_corners: no valid strips extracted.")
+        return None
+
+    min_rows = min(s.shape[0] for s in strips)
+    return np.concatenate([s[:min_rows] for s in strips], axis=1)
+
+#-----------------
+# Old algorithm
+#-----------------
 
 def crop_sidelobes(
     image: np.ndarray,
@@ -150,7 +268,7 @@ def crop_sidelobes(
     y_poss: List[float],
     centroid_data: Dict[int, float],
     sidelobe_offset: int = DEFAULT_SIDELOBE_OFFSET,
-    angle_degrees: int = DEFAULT_ANGLE_DEGREES,
+    angle_degrees: float = 45.0,
     width: int = DEFAULT_STRIP_WIDTH,
     length: int = DEFAULT_STRIP_LENGTH,
 ) -> Optional[np.ndarray]:
