@@ -15,18 +15,21 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
-    "pytest>=9",
+    "pytest>=8",
     "pytest-benchmark>=5",
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["workers*"]
 
 # ---------------------------------------------------------------------------
 # pytest configuration
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths     = ["tests"]
+pythonpath    = ["."]
+importmode    = "importlib"
 python_files  = ["test_*.py"]
 python_classes= ["Test*"]
 python_functions = ["test_*"]
