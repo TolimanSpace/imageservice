@@ -272,7 +272,9 @@ class XimeaCamera:
 
     MAX_PIXEL_VALUE: int = 4095
 
-    def __init__(self, config: CameraConfig) -> None:
+    def __init__(self, config: CameraConfig, _xiapi=None) -> None:
+        import ximea.xiapi as _real_xiapi
+        self._xiapi = _xiapi if _xiapi is not None else _real_xiapi
         self._config = config
         self._cam: Optional[xiapi.Camera] = None
         self._img: Optional[xiapi.Image] = None
@@ -301,14 +303,14 @@ class XimeaCamera:
         """Open the camera device."""
         if self._cam is not None:
             raise RuntimeError("Camera is already open.")
-        self._cam = xiapi.Camera()
+        self._cam = self._xiapi.Camera()
         if self._config.serial_number is not None:
             logger.info("Opening camera by SN: %s", self._config.serial_number)
             self._cam.open_device_by_SN(self._config.serial_number)
         else:
             logger.info("Opening first available camera.")
             self._cam.open_device()
-        self._img = xiapi.Image()
+        self._img = self._xiapi.Image()
         model = self._cam.get_device_name()
         sn = self._cam.get_device_sn()
         logger.info("Opened camera: model=%s SN=%s", model, sn)
