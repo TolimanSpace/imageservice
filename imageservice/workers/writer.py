@@ -81,7 +81,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from camera import AcquiredFrame
+from workers.camera import AcquiredFrame
 
 logger = logging.getLogger(__name__)
 

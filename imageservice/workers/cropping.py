@@ -189,7 +189,7 @@ def crop_sidelobe_strip(
     xx = x_grid - x_star
     yy = y_grid - y_star
 
-    mask = np.abxs(xx - yy * cot_a) <= width / 2.0
+    mask = np.abs(xx - yy * cot_a) <= width / 2.0
 
     if not mask.any():
         return np.empty((0,width), dtype=image.dtype)

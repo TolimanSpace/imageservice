@@ -66,18 +66,18 @@ from typing import Dict, List, Optional, Tuple
 import netCDF4 as nc
 import numpy as np
 
-from config import SystemConfig, SessionConfig
-from cropping import (
+from workers.config import SystemConfig, SessionConfig
+from workers.cropping import (
     DEFAULT_STRIP_WIDTH,
     crop_and_merge_corners,
 )
-from star_finder import (
+from workers.star_finder import (
     find_stars,
     load_deconvolution_kernel,
     roi_local_to_sensor,
     sensor_to_roi_local,
 )
-from camera import CameraMode
+from workers.camera import CameraMode
 
 
 logger = logging.getLogger(__name__)

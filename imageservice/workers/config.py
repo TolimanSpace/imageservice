@@ -88,7 +88,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import List, Optional
 
-from camera import (
+from workers.camera import (
     CameraConfig,
     CameraMode,
     RoiDefinition,

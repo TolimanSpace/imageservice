@@ -80,18 +80,18 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from camera import (
+from workers.camera import (
     AcquiredFrame,
     CameraMode,
     XimeaCamera,
 )
-from centroid import (
+from workers.centroid import (
     CENTRE_ROI_LABEL,
     PointingError,
     compute_pointing_error,
 )
-from config import SessionConfig, SystemConfig
-from writer import FrameWriter
+from workers.config import SessionConfig, SystemConfig
+from workers.writer import FrameWriter
 
 logger = logging.getLogger(__name__)
 
