@@ -144,48 +144,6 @@ def _crop_areas(
     return np.asarray(output)
 
 
-def crop_sidelobes_old(image, x_poss, y_poss, angle_degrees = 45, width = 6, length=360):
-    """
-    Return a sub image of sidelobes for centred at (x_poss, y_poss) from an image
-
-    This is an old version of this function that takes too long to run
-
-    Args:
-        image (numpy.ndarray): ndarray of flux values
-        x_poss (list): list of X coordinates of the stars
-        y_poss (list): list of Y coordinates of the stars
-        angle_degrees (float): angle of sidelobes from x axis in degrees (default 45)
-        width (int): width of crop in pixels (default 6)
-        length (int): length of crop around each sidelobe in pixels (default 360)
-
-    Returns:
-        numpy.ndarray: crops around each sidelobe combined into a single rectangular array of size 4*width x 2*length
-    """
-    
-    output = []
-    
-    angles_radians = [np.deg2rad(angle_degrees), np.deg2rad(angle_degrees+90)]
-
-    for x_pos, y_pos in zip(x_poss, y_poss):
-        y, x = np.indices(image.shape)
-        y = y - y_pos
-        x = x - x_pos
-
-        for angle in angles_radians:
-            sidelobe_x = np.abs(DEFAULT_SIDELOBE_OFFSET * np.cos(angle))
-            sidelobe_y = np.abs(DEFAULT_SIDELOBE_OFFSET * np.sin(angle))
-
-            if np.abs(angle-np.pi/2) <= np.pi/4:
-                mask = (np.abs(x - y / np.tan(angle)) <= width/2) & (np.abs(np.abs(y)-sidelobe_y) <= length/2)
-            else:
-                mask = (np.abs(y - x * np.tan(angle)) <= width/2) & (np.abs(np.abs(x)-sidelobe_x) <= length/2)
-
-            output.append(image[mask].reshape((image[mask].shape[0]//width,width)))
-
-    result = np.block([a for a in output])
-
-    return result
-
 def crop_sidelobes(
     image: np.ndarray,
     x_poss: List[float],
