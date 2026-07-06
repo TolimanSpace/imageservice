@@ -1,5 +1,5 @@
 """
-tests/unit/test_compressor.py - Unit tests for workers.compression
+tests/unit/test_compression.py - Unit tests for workers.compression
 """
 
 import pytest

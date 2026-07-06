@@ -1,5 +1,5 @@
 """
-tests/unit/test_star_finder.py - Unit tests for startracker.star_finder
+tests/unit/test_star_finder.py - Unit tests for workers.star_finder
 """
 
 import pytest

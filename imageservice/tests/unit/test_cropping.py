@@ -1,5 +1,5 @@
 """
-tests/unit/test_roi_crop.py - Unit tests for startracker.roi_crop
+tests/unit/test_cropping.py - Unit tests for workers.cropping
 """
 
 import pytest

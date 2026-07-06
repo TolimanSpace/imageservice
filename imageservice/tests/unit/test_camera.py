@@ -1,5 +1,5 @@
 """
-tests/unit/test_camera.py - Unit tests for startracker.camera
+tests/unit/test_camera.py - Unit tests for workers.camera
 
 Tests are grouped by class/function under TestCameraConfig,
 TestCameraLifecycle, TestAcquisition, and TestFactories.

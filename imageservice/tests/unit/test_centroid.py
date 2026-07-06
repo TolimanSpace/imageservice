@@ -1,5 +1,5 @@
 """
-tests/unit/test_centroid.py - Unit tests for startracker.centroid
+tests/unit/test_centroid.py - Unit tests for worker.centroid
 """
 
 import pytest

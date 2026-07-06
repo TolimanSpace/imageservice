@@ -1,5 +1,5 @@
 """
-tests/unit/test_writer.py - Unit tests for startracker.writer
+tests/unit/test_writer.py - Unit tests for workers.writer
 """
 
 import time

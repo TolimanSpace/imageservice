@@ -1,5 +1,5 @@
 """
-tests/unit/test_config.py - Unit tests for startracker.config
+tests/unit/test_config.py - Unit tests for workers.config
 """
 
 import dataclasses
