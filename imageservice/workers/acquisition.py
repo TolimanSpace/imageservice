@@ -92,6 +92,7 @@ from workers.centroid import (
 )
 from workers.config import SessionConfig, SystemConfig
 from workers.writer import FrameWriter
+from workers.process_timing_logger import TimingLogger
 
 logger = logging.getLogger(__name__)
 
@@ -274,8 +275,21 @@ def _run(
         for label, shape in data_rois.items()
     }
 
+    # Acquisition-side timing logger
+    acq_tlog = TimingLogger(
+        component="acquisition",
+        session_id=session.session_id,
+        log_dir=system.log_dir,
+        enabled=enable_diagnostics,
+    )
+
     try:
         for w in writers.values():
+            w.configure_diagnostics(
+                session_id=session.session_id,
+                log_dir=system.log_dir,
+                enable=enable_diagnostics,
+            )
             w.start()
 
         with XimeaCamera(camera_config) as cam:
@@ -291,8 +305,10 @@ def _run(
                 # ---------------------------------------------------------
                 t0 = time.perf_counter_ns() if enable_diagnostics else 0
 
+                if enable_diagnostics: acq_tlog.start("acquire")
                 try:
                     frame = cam.acquire_frame()
+                    if enable_diagnostics: acq_tlog.end("acquire")
                     consecutive_errors = 0
                 except Exception as e:
                     consecutive_errors += 1
@@ -332,6 +348,7 @@ def _run(
                 pointing: Optional[PointingError] = None
 
                 if centre_roi is not None:
+                    if enable_diagnostics: acq_tlog.start("centroid")
                     pointing = compute_pointing_error(
                         centre_roi=centre_roi,
                         roi_offset_x=centre_offset_x,
@@ -345,19 +362,23 @@ def _run(
 
                 if pointing is not None:
                     _publish_pointing_error(pointing)
+                    if enable_diagnostics: acq_tlog.end("centroid")
                 else:
                     n_centroid_none += 1
                     _publish_no_signal(frame.frame_id, frame.timestamp_ns)
+                    if enable_diagnostics: acq_tlog.end("centroid")
 
                 t_centroid = time.perf_counter_ns() if enable_diagnostics else 0
 
                 # ---------------------------------------------------------
                 # Push frames to writers
                 # ---------------------------------------------------------
+                if enable_diagnostics: acq_tlog.start("push")
                 for label, writer in writers.items():
                     roi_arr = frame.rois.get(label)
                     if roi_arr is not None:
                         writer.push(roi_arr, frame)
+                if enable_diagnostics: acq_tlog.end("push")
 
                 t_push = time.perf_counter_ns() if enable_diagnostics else 0
 
@@ -387,6 +408,7 @@ def _run(
         fault = True
         fault_message = f"Unexpected error: {e}"
     finally:
+        acq_tlog.close()
         for w in writers.values():
             w.stop()
 

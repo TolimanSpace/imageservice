@@ -82,6 +82,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 from workers.camera import AcquiredFrame
+from workers.process_timing_logger import TimingLogger
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,9 @@ class FrameWriter:
         self._frames_dropped: int = 0
         self._write_errors:   int = 0
 
+        # Logger
+        self._timing_logger: Optional[TimingLogger] = None
+
         self._lock = threading.Lock()
         self._data_available = threading.Event()
         self._stop_event     = threading.Event()
@@ -212,6 +216,22 @@ class FrameWriter:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def configure_diagnostics(
+        self,
+        session_id: str,
+        log_dir: str,
+        enable: bool = True,
+    ) -> None:
+
+        if not enable:
+            return
+        self._timing_logger = TimingLogger(
+            component=f"writer_{self._roi_label}",
+            session_id=session_id,
+            log_dir=log_dir,
+            enabled=True
+        )
 
     def start(self) -> None:
         """
@@ -275,6 +295,11 @@ class FrameWriter:
             logger.info("FrameWriter drained cleanly.")
 
         self._close_files()
+
+        if self._timing_logger:
+            self._timing_logger.close()
+            self._timing_logger = None
+
         self._thread = None
 
         s = self.stats
@@ -395,8 +420,11 @@ class FrameWriter:
         """
         logger.debug("Writer thread started.")
         while True:
+            tlog = self._timing_logger
+            if tlog: tlog.start("idle")
             self._data_available.wait()
             self._data_available.clear()
+            if tlog: tlog.end("idle")
 
             # Drain all pending frames
             while True:
@@ -411,7 +439,9 @@ class FrameWriter:
 
                 # Write pixel data
                 try:
+                    if tlog: tlog.start("write_bin")
                     self._bin_file.write(frame_view.tobytes())
+                    if tlog: tlog.end("write_bin")
                 except OSError as e:
                     self._write_errors += 1
                     logger.error(
@@ -421,7 +451,9 @@ class FrameWriter:
                 else:
                     # Write metadata only if pixel write succeeded
                     try:
+                        if tlog: tlog.start("write_meta")
                         self._meta_file.write(json.dumps(meta) + "\n")
+                        if tlog: tlog.end("write_meta")
                     except OSError as e:
                         self._write_errors += 1
                         logger.error("Metadata write error: %s", e)
