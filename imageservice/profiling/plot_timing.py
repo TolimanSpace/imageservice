@@ -23,8 +23,8 @@ if _project_root not in sys.path:
 FIGURE_DPI     = 150
 SCATTER_COLOR  = "#1f77b4"
 REF_LINE_COLOR = "#d62728"
-SCATTER_SIZE   = 4
-SCATTER_ALPHA  = 0.5
+SCATTER_SIZE   = 6
+SCATTER_ALPHA  = 1
 FONT_SIZE      = 11
 
 
@@ -57,6 +57,7 @@ def extract_arrays(records: List[Dict]):
 def plot_camera_timing(
     records: List[Dict],
     nominal_rate_hz: float,
+    measured_rate_hz: float,
     session_id: Optional[str] = None,
 ) -> plt.Figure:
     timestamp_s, _, frame_ids = extract_arrays(records)
@@ -86,26 +87,27 @@ def plot_camera_timing(
 
     ax_top.scatter(t_mid_s, dt_s, **kw)
     ax_top.axhline(nominal_period_s, color=REF_LINE_COLOR, linewidth=1.2,
-                   zorder=5, label=f"Nominal ({nominal_rate_hz:.1f} Hz)")
+                   zorder=5, label=f"Target ({nominal_rate_hz:.1f} Hz)")
     ax_top.set_ylabel(r"$\Delta t$ (seconds)", fontsize=FONT_SIZE)
-    ax_top.set_ylim(bottom=0)
+    ax_top.set_ylim(bottom=0, top=nominal_period_s*5)
     ax_top.legend(fontsize=FONT_SIZE - 1, loc="upper right")
     ax_top.text(
         0.01, 0.97,
-        f"n = {n_frames:,}   dropped = {n_dropped}   duration = {duration_s:.0f} s",
+        f"Median rate = {measured_rate_hz:.2f} Hz   n = {n_frames:,}   dropped = {n_dropped}   duration = {duration_s:.0f} s",
         transform=ax_top.transAxes, fontsize=FONT_SIZE - 2, va="top", color="0.4",
     )
 
+    r_std = float(np.std(residual_us[well_behaved]))
+    r_p99 = float(np.percentile(np.abs(residual_us[well_behaved]), 99))
+
     ax_bot.scatter(t_mid_s[well_behaved], residual_us[well_behaved], **kw)
     ax_bot.axhline(0, color=REF_LINE_COLOR, linewidth=1.2, zorder=5)
-    ax_bot.set_ylim(-10, 10)
+    ax_bot.set_ylim(-10, r_p99*1.5)
     ax_bot.set_ylabel(
         r"$\Delta t - t_{\rm nom}$ ($\mu$s)", fontsize=FONT_SIZE
     )
     ax_bot.set_xlabel("Camera Time (seconds)", fontsize=FONT_SIZE)
 
-    r_std = float(np.std(residual_us[well_behaved]))
-    r_p99 = float(np.percentile(np.abs(residual_us[well_behaved]), 99))
     ax_bot.text(
         0.01, 0.97,
         f"std = {r_std:.2f} µs   |Δ| p99 = {r_p99:.2f} µs",
@@ -131,6 +133,8 @@ def plot_host_timing(
     dt_s   = np.diff(host_time)
     t_rel  = host_time[:-1] - host_time[0]
 
+    measured_hz = 1.0 / float(np.median(dt_s))
+
     fig, ax = plt.subplots(figsize=(12, 4))
     title = "Host Acquisition Timestamp"
     if session_id:
@@ -143,7 +147,7 @@ def plot_host_timing(
                zorder=5, label=f"Nominal ({nominal_rate_hz:.1f} Hz)")
     ax.set_xlabel("Session Time (seconds)", fontsize=FONT_SIZE)
     ax.set_ylabel(r"$\Delta t$ (seconds)", fontsize=FONT_SIZE)
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=max([2*nominal_period_s,1.1*max(dt_s)]))
     ax.set_xlim(t_rel[0], t_rel[-1])
     ax.tick_params(labelsize=FONT_SIZE - 1)
     ax.legend(fontsize=FONT_SIZE - 1, loc="upper right")
@@ -151,7 +155,7 @@ def plot_host_timing(
     n_above = int(np.sum(dt_s > nominal_period_s * 2))
     ax.text(
         0.01, 0.97,
-        f"n = {len(records):,}   >2× nominal: {n_above}   "
+        f"Median rate = {measured_hz:.2f} Hz   n = {len(records):,}   >2× nominal: {n_above}   "
         f"mean Δt = {np.mean(dt_s) * 1e3:.1f} ms",
         transform=ax.transAxes, fontsize=FONT_SIZE - 2, va="top", color="0.4",
     )
@@ -163,6 +167,7 @@ def plot_host_timing(
 def plot_timing_summary(
     records: List[Dict],
     nominal_rate_hz: float,
+    measured_rate_hz: float,
     session_id: Optional[str] = None,
 ) -> plt.Figure:
     timestamp_s, host_time, frame_ids = extract_arrays(records)
@@ -181,8 +186,8 @@ def plot_timing_summary(
     duration_s = timestamp_s[-1] - timestamp_s[0]
 
     fig, axes = plt.subplots(
-        3, 1, figsize=(10, 10),
-        gridspec_kw={"hspace": 0.45, "height_ratios": [2, 1.5, 2]},
+        2, 1, figsize=(10, 8),
+        gridspec_kw={"hspace": 0.45, "height_ratios": [2, 2]},
     )
 
     title = "Acquisition Timing Summary"
@@ -196,36 +201,39 @@ def plot_timing_summary(
     axes[0].scatter(cam_t, cam_dt_s, **kw)
     axes[0].axhline(nominal_period_s, color=REF_LINE_COLOR, linewidth=1.2, zorder=5)
     axes[0].set_ylabel(r"Camera $\Delta t$ (s)", fontsize=FONT_SIZE)
-    axes[0].set_ylim(bottom=0)
+    axes[0].set_ylim(bottom=0, top=nominal_period_s*5)
     axes[0].set_xlim(cam_t[0], cam_t[-1])
     axes[0].text(
         0.01, 0.97,
-        f"n = {n_frames:,}   dropped = {n_dropped}   duration = {duration_s:.0f} s",
+        f"Median rate = {measured_rate_hz:.2f} Hz   n = {n_frames:,}   dropped = {n_dropped}   duration = {duration_s:.0f} s",
         transform=axes[0].transAxes, fontsize=FONT_SIZE - 2, va="top", color="0.4",
     )
 
-    axes[1].scatter(cam_t[well_behaved], residual_us[well_behaved], **kw)
-    axes[1].axhline(0, color=REF_LINE_COLOR, linewidth=1.2, zorder=5)
-    axes[1].set_ylim(-10, 10)
-    axes[1].set_ylabel(r"Camera jitter ($\mu$s)", fontsize=FONT_SIZE)
-    axes[1].set_xlim(cam_t[0], cam_t[-1])
-    r_std = float(np.std(residual_us[well_behaved]))
-    axes[1].text(
-        0.01, 0.97, f"std = {r_std:.2f} µs",
-        transform=axes[1].transAxes, fontsize=FONT_SIZE - 2, va="top", color="0.4",
-    )
+    # axes[1].scatter(cam_t[well_behaved], residual_us[well_behaved], **kw)
+    # axes[1].axhline(0, color=REF_LINE_COLOR, linewidth=1.2, zorder=5)
+    # axes[1].set_ylim(-10, 10)
+    # axes[1].set_ylabel(r"Camera jitter ($\mu$s)", fontsize=FONT_SIZE)
+    # axes[1].set_xlim(cam_t[0], cam_t[-1])
+    # r_std = float(np.std(residual_us[well_behaved]))
+    # axes[1].text(
+    #     0.01, 0.97, f"std = {r_std:.2f} µs",
+    #     transform=axes[1].transAxes, fontsize=FONT_SIZE - 2, va="top", color="0.4",
+    # )
 
-    axes[2].scatter(host_t_rel, host_dt_s, **kw)
-    axes[2].axhline(nominal_period_s, color=REF_LINE_COLOR, linewidth=1.2, zorder=5)
-    axes[2].set_ylabel(r"Host $\Delta t$ (s)", fontsize=FONT_SIZE)
-    axes[2].set_xlabel("Session Time (seconds)", fontsize=FONT_SIZE)
-    axes[2].set_ylim(bottom=0)
-    axes[2].set_xlim(host_t_rel[0], host_t_rel[-1])
-    axes[2].text(
+    host_hz = 1.0 / float(np.median(host_dt_s))
+
+    axes[1].scatter(host_t_rel, host_dt_s, **kw)
+    axes[1].axhline(nominal_period_s, color=REF_LINE_COLOR, linewidth=1.2, zorder=5)
+    axes[1].set_ylabel(r"Host $\Delta t$ (s)", fontsize=FONT_SIZE)
+    axes[1].set_xlabel("Session Time (seconds)", fontsize=FONT_SIZE)
+    axes[1].set_ylim(bottom=0, top=max([2*nominal_period_s,1.1*max(host_dt_s)]))
+    # axes[1].set_ylim(bottom=0)
+    axes[1].set_xlim(host_t_rel[0], host_t_rel[-1])
+    axes[1].text(
         0.01, 0.97,
-        f"mean = {np.mean(host_dt_s)*1e3:.1f} ms   "
+        f"Median rate = {host_hz:.2f} Hz   mean = {np.mean(host_dt_s)*1e3:.1f} ms   "
         f">2× nominal: {int(np.sum(host_dt_s > nominal_period_s * 2))}",
-        transform=axes[2].transAxes, fontsize=FONT_SIZE - 2, va="top", color="0.4",
+        transform=axes[1].transAxes, fontsize=FONT_SIZE - 2, va="top", color="0.4",
     )
 
     for ax in axes:
@@ -256,12 +264,14 @@ def main():
     records = load_metadata(args.meta)
     print(f"Loaded {len(records):,} frames.")
 
+    ts, _, _ = extract_arrays(records)
+    measured_hz = 1.0 / float(np.median(np.diff(ts)))
+    print(f"Measured rate: {measured_hz:.2f} Hz")
+
     if args.rate is not None:
         nominal_hz = args.rate
     else:
-        ts, _, _ = extract_arrays(records)
-        nominal_hz = 1.0 / float(np.median(np.diff(ts)))
-        print(f"Estimated rate: {nominal_hz:.2f} Hz")
+        nominal_hz = measured_hz
 
     session_id = os.path.basename(args.meta).split("_meta.jsonl")[0]
     os.makedirs(args.output_dir, exist_ok=True)
@@ -274,11 +284,11 @@ def main():
         print(f"Saved: {path}")
 
     if args.summary_only:
-        save(plot_timing_summary(records, nominal_hz, session_id), "timing_summary")
+        save(plot_timing_summary(records, nominal_hz, measured_hz, session_id), "timing_summary")
     else:
-        save(plot_camera_timing(records, nominal_hz, session_id), "camera_timing")
+        save(plot_camera_timing(records, nominal_hz, measured_hz, session_id), "camera_timing")
         save(plot_host_timing(records, nominal_hz, session_id),   "host_timing")
-        save(plot_timing_summary(records, nominal_hz, session_id),"timing_summary")
+        save(plot_timing_summary(records, nominal_hz, measured_hz, session_id),"timing_summary")
 
 
 if __name__ == "__main__":
