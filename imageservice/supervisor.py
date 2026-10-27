@@ -251,10 +251,10 @@ class CspInterface:
             session_id=f"stub_{int(time.time())}",
             mode=CameraMode.SINGLE_ROI,
             frame_rate_hz=100.0,
-            exposure_us=5_000,
+            exposure_us=2_500,
             n_frames=None,
-            duration_s=60,
-            enable_diagnostics=True,
+            duration_s=10,
+            enable_diagnostics=False,
         )
 
     def send_status(self, status: SessionStatus) -> None:
@@ -356,8 +356,8 @@ def command_to_session_config(
     if command.mode is CameraMode.SINGLE_ROI:
         # Use ROI dimensions from the command if provided otherwise
         # default to a centred 128x128 region on the sensor
-        roi_w = command.roi_width if command.roi_width else 848
-        roi_h = command.roi_height if command.roi_height else 848
+        roi_w = command.roi_width if command.roi_width else 864
+        roi_h = command.roi_height if command.roi_height else 864
         offset_x = (system.sensor_width - roi_w) // 2
         offset_y = (system.sensor_height - roi_h) // 2
         rois = [RoiDefinition(
