@@ -36,6 +36,7 @@ Output files (written per session)
             "frame_id":        int,    # acq_nframe from AcquiredFrame
             "timestamp_ns":    int,    # camera hardware timestamp
             "host_time":       float,  # time.monotonic() at acquisition
+            "unix_time_ns":    int,    # SEC Unix time at acquisition (ns)
             "nframes_dropped": int,    # dropped frames before this one
             "roi_label":       str,    # which ROI this frame came from
             "n_rows":          int,    # frame height in pixels
@@ -374,6 +375,7 @@ class FrameWriter:
                 "frame_id":        acquired.frame_id,
                 "timestamp_ns":    acquired.timestamp_ns,
                 "host_time":       acquired.host_time,
+                "unix_time_ns":    acquired.unix_time_ns,
                 "nframes_dropped": acquired.nframes_dropped,
                 "roi_label":       self._roi_label,
                 "n_rows":          self._frame_shape[0],

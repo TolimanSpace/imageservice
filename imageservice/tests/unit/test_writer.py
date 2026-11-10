@@ -18,6 +18,7 @@ def _make_acquired(frame_id: int, shape) -> tuple:
         frame_id=frame_id,
         timestamp_ns=frame_id * 10_000_000,
         host_time=float(frame_id) * 0.01,
+        unix_time_ns=1_700_000_000_000_000_000 + frame_id * 10_000_000,
         mode=CameraMode.SINGLE_ROI,
         rois={},
         nframes_dropped=0,
@@ -86,6 +87,7 @@ class TestFrameWriter:
         assert m["roi_label"] == "roi"
         assert m["n_rows"]    == star_roi.shape[0]
         assert m["n_cols"]    == star_roi.shape[1]
+        assert m["unix_time_ns"] == 1_700_000_000_000_000_000
 
     def test_ring_buffer_overflow_drops_oldest(self, tmp_data_dir, star_roi):
         buf_size = 4

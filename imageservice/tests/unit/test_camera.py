@@ -292,6 +292,15 @@ class TestAcquisition:
             frame = cam.acquire_frame()
         assert frame.timestamp_ns > 0
 
+    def test_unix_time_populated(self, single_roi_cfg, fake_xiapi, star_roi):
+        import time
+        with XimeaCamera(single_roi_cfg, _xiapi=fake_xiapi) as cam:
+            cam._img.set_data(star_roi)
+            before = time.time_ns()
+            frame = cam.acquire_frame()
+            after = time.time_ns()
+        assert before <= frame.unix_time_ns <= after
+
     def test_full_frame_mode_rois_key(self, full_frame_cfg,
                                        fake_xiapi):
         full_frame = np.zeros((4504, 4504), dtype=np.uint16)

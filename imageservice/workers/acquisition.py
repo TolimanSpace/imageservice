@@ -18,7 +18,7 @@ configured frame rate. On each frame:
 The loop runs until one of:
   - n_frames frames have been acquired   (if SessionConfig.n_frames is set)
   - duration_s seconds have elapsed      (if SessionConfig.duration_s is set)
-  - a stop event is set externally
+  - the stop event passed to run_acquisition() is set (STOP command)
   - an unrecoverable camera fault occurs
 
 Error handling
@@ -76,7 +76,7 @@ import multiprocessing
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -153,8 +153,16 @@ class AcquisitionResult:
         Total session wall time in seconds.
     diagnostics : np.ndarray or None
         Per-frame timing array if diagnostics were enabled; None otherwise.
-        dtype fields: frame_id (i8), t_acquire_us (f4), t_centroid_us (f4),
-        t_push_us (f4), t_total_us (f4), interframe_us (f4).
+        dtype fields: frame_id (i8), unix_time_ns (i8), t_acquire_us (f4),
+        t_centroid_us (f4), t_push_us (f4), t_total_us (f4),
+        interframe_us (f4).
+    start_unix_ns : int
+        SEC Unix time (time.time_ns()) when the session started.
+    clock_first, clock_last : (int, int) or None
+        (camera timestamp_ns, SEC unix_time_ns) of the first and last
+        acquired frame; None if no frame was acquired. Their difference is
+        the camera-clock to Unix offset at the start and end of the session
+        (the change between them is the camera clock's drift).
     """
     session_id: str
     frames_acquired: int
@@ -167,11 +175,15 @@ class AcquisitionResult:
     fault_message: Optional[str]
     elapsed_s: float
     diagnostics: Optional[np.ndarray]
+    start_unix_ns: int = 0
+    clock_first: Optional[Tuple[int, int]] = None
+    clock_last: Optional[Tuple[int, int]] = None
 
 
 # Structured dtype for per-frame diagnostics (pre-allocated)
 _DIAG_DTYPE = np.dtype([
     ("frame_id",       np.int64),
+    ("unix_time_ns",   np.int64),     # SEC Unix time at acquisition
     ("t_acquire_us",   np.float32),   # time inside get_image()
     ("t_centroid_us",  np.float32),   # time for centroid computation
     ("t_push_us",      np.float32),   # time to push to all writers
@@ -189,6 +201,7 @@ def run_acquisition(
     session: SessionConfig,
     result_queue: multiprocessing.Queue,
     enable_diagnostics: bool = False,
+    stop_event: Optional[multiprocessing.Event] = None,
 ) -> None:
     """
     Main acquisition entry point. Intended to run in a dedicated process.
@@ -208,6 +221,8 @@ def run_acquisition(
     enable_diagnostics : bool
         If True, record per-frame timing diagnostics. Adds two
         perf_counter_ns() calls per frame to the hot path.
+    stop_event : multiprocessing.Event, optional
+        Ends the session early (after the current frame) when set.
     """
     _configure_logging(system.log_dir, session.session_id)
     logger.info(
@@ -217,7 +232,7 @@ def run_acquisition(
 
     _try_set_realtime_priority()
 
-    result = _run(system, session, enable_diagnostics)
+    result = _run(system, session, enable_diagnostics, stop_event)
     result_queue.put(result)
 
     logger.info(
@@ -234,6 +249,7 @@ def _run(
     system: SystemConfig,
     session: SessionConfig,
     enable_diagnostics: bool,
+    stop_event: Optional[multiprocessing.Event] = None,
 ) -> AcquisitionResult:
     """
     Build the camera config, open writers, and run the acquisition loop.
@@ -261,6 +277,9 @@ def _run(
     fault:            bool = False
     fault_message:    Optional[str] = None
     session_start:    float = time.monotonic()
+    start_unix_ns:    int = time.time_ns()
+    clock_first:      Optional[Tuple[int, int]] = None
+    clock_last:       Optional[Tuple[int, int]] = None
 
     # Open one FrameWriter per data ROI
     writers: Dict[str, FrameWriter] = {
@@ -298,7 +317,8 @@ def _run(
             consecutive_errors: int = 0
             last_frame_time:    float = time.monotonic()
 
-            while _should_continue(session, frames_acquired, session_start):
+            while _should_continue(session, frames_acquired, session_start,
+                                   stop_event):
 
                 # ---------------------------------------------------------
                 # Frame acquisition
@@ -340,6 +360,9 @@ def _run(
 
                 t_acquire = time.perf_counter_ns() if enable_diagnostics else 0
                 frames_acquired += 1
+                clock_last = (frame.timestamp_ns, frame.unix_time_ns)
+                if clock_first is None:
+                    clock_first = clock_last
 
                 # ---------------------------------------------------------
                 # Centroid and pointing error
@@ -391,6 +414,7 @@ def _run(
                     last_frame_time = now
                     diag_buf[diag_idx] = (
                         frame.frame_id,
+                        frame.unix_time_ns,
                         (t_acquire  - t0)         / 1e3,
                         (t_centroid - t_acquire)  / 1e3,
                         (t_push     - t_centroid) / 1e3,
@@ -437,6 +461,9 @@ def _run(
         diagnostics=(
             diag_buf[:diag_idx] if enable_diagnostics else None
         ),
+        start_unix_ns=start_unix_ns,
+        clock_first=clock_first,
+        clock_last=clock_last,
     )
 
 
@@ -448,8 +475,12 @@ def _should_continue(
     session: SessionConfig,
     frames_acquired: int,
     session_start: float,
+    stop_event: Optional[multiprocessing.Event] = None,
 ) -> bool:
     """Return True if the acquisition loop should continue."""
+    if stop_event is not None and stop_event.is_set():
+        logger.info("Stop requested.")
+        return False
     if session.n_frames is not None:
         if frames_acquired >= session.n_frames:
             logger.info(

@@ -179,6 +179,10 @@ class AcquiredFrame:
     host_time : float
         time.monotonic() recorded immediately after get_image() returns,
         for latency diagnostics
+    unix_time_ns : int
+        The SEC's Unix time (time.time_ns()) taken together with host_time.
+        Places the frame in UTC on the ground; unix_time_ns - timestamp_ns
+        is the camera-clock to Unix offset at this frame
     mode : CameraMode
         The operationg mode active when this frame was acquired
     rois : dict[str, np.ndarray]
@@ -194,6 +198,7 @@ class AcquiredFrame:
     frame_id: int
     timestamp_ns: int
     host_time: float
+    unix_time_ns: int
     mode: CameraMode
     rois: Dict[str, np.ndarray]
     nframes_dropped: int
@@ -484,6 +489,7 @@ class XimeaCamera:
         
         self._cam.get_image(self._img, timeout=timeout_ms)
         host_time = time.monotonic()
+        unix_time_ns = time.time_ns()
 
         # Reconstruct hardware timestamp in nanoseconds from seconds + microseconds
         timestamp_ns = (
@@ -525,6 +531,7 @@ class XimeaCamera:
             frame_id=acq_nframe,
             timestamp_ns=timestamp_ns,
             host_time=host_time,
+            unix_time_ns=unix_time_ns,
             mode=self._config.mode,
             rois=roi_arrays,
             nframes_dropped=nframes_dropped,

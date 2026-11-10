@@ -5,79 +5,100 @@ The supervisor is the top-level entry point for the image acquisition system.
 It is responsible for:
 
   1. Loading SystemConfig from the JSON config file at startup
-  2. Listening for session commands from the OBC via CSP
+  2. Connecting to the SEC executive's Unix socket as the Camera service
+     (SID 2) and receiving session commands the OBC sends on CSP port 23
   3. Validating the command and constructing a SessionConfig
   4. Launching the acquisition process (acquisition.py) as a subprocess
   5. Monitoring the subprocess and handling its AcquisitionResult
-  6. Reporting session status and faults back to the OBC via CSP
+  6. Reporting session status and faults back to the OBC as events
   7. Logging all events to a session log file
 
 Lifecycle
 ---------
-The supervisor runs a single imaging session per invocation and then exits.
-It is expected to be launched by the OBC (or a higher-level process manager)
-for each imaging session.
+The supervisor stays resident and runs one imaging session per START
+command. On the SEC it runs as the systemd unit toliman-camera.service,
+which the OBC starts, stops and restarts with the SID 0 Start/Stop/Reset
+Payload commands.
 
-    OBC sends START command → supervisor launches acquisition subprocess
-                            → acquisition runs until n_frames / duration_s
-                            → supervisor receives AcquisitionResult
-                            → supervisor sends STATUS to OBC
-                            → supervisor exits
+    OBC sends START → supervisor launches acquisition subprocess
+                    → acquisition runs until n_frames / duration_s / STOP
+                    → supervisor receives AcquisitionResult
+                    → supervisor sends the status as an event to the OBC
+                    → supervisor waits for the next START
 
-If the acquisition subprocess faults (camera SEL, unrecoverable error), the
-supervisor reports the fault to the OBC and exits with a non-zero exit code.
+A camera fault (camera SEL, unrecoverable error) ends the session with a
+fault status; the supervisor then waits for the next START, which reopens
+the camera (after the OBC has power cycled it). With --once the supervisor
+exits after one session, with a non-zero exit code on failure.
 
-CSP interface (stubbed)
------------------------
-The CspInterface class below is a stub. It defines the API that the real
-implementation must satisfy:
+Executive interface (SID 2)
+---------------------------
+Only the executive speaks CSP on the SEC. Payload services connect to its
+Unix socket (TOLIMAN_IPC_SOCKET, default /tmp/toliman-executive.sock) with
+toliman_service.py, a copy of the SEC repository's Python service template.
+The executive forwards port 23 commands with SID 2 and stores the events in
+its event log, which the OBC downloads.
 
-  receive_command() → SessionCommand
-      Block until a START command arrives from the OBC, parse it into a
-      SessionCommand, and return it.  Raise CommandTimeout if no command
-      arrives within the configured timeout.
+Port 23 commands (SID 2):
 
-  send_status(status: SessionStatus) → None
-      Send a status message to the OBC. Called after session completion
-      (success or fault) and optionally at intermediate checkpoints.
+  0x01 START  54 bytes, little endian (the trailing ROI size may be omitted):
+      uint8    mode           0=SINGLE_ROI, 1=MULTI_ROI, 2=FULL_FRAME
+      float32  frame_rate_hz
+      uint32   exposure_us
+      int32    n_frames       -1 = no frame limit
+      float32  duration_s     0.0 = no time limit
+      uint8    diagnostics    0 or 1
+      char[32] session_id     NUL-padded; letters, digits, '_', '-', '.'
+      uint16   roi_width      SINGLE_ROI only; 0 = default
+      uint16   roi_height     SINGLE_ROI only; 0 = default
+  0x02 STOP   no parameters: ends the running session after the current
+              frame; the session reports its status as usual.
 
-Todo:
-  1. Fill in CspInterface.__init__() to initialise the CSP node with
-     node address and port assignment
-  2. Implement receive_command() to deserialise the command packet
-     format into a SessionCommand
-  3. Implement send_status() to serialise SessionStatus into the
-     telemetry packet format
+Reply codes: 0x00 accepted, 0x01 unknown command, 0x02 wrong length,
+0x03 invalid parameters, 0x04 a session is already running, 0x05 no session
+is running (STOP). START replies as soon as the session is accepted; the
+outcome follows as an event.
 
 Usage
 -----
     python3 supervisor.py --config /etc/imageservice/config.json
 
-    # With timeout: wait up to 60s for a START command, then exit
+    # Run one session, then exit
+    python3 supervisor.py --config /etc/imageservice/config.json --once
+
+    # With timeout: exit if no START arrives within 60 s
     python3 supervisor.py --config /etc/imageservice/config.json --timeout 60
 
-    # Dry run: validate config and CSP interface without launching acquisition
+    # Dry run: validate config without connecting or launching acquisition
     python3 supervisor.py --config /etc/imageservice/config.json --dry-run
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import math
 import multiprocessing
 import os
-import pathlib
+import queue
+import re
+import signal
+import struct
 import sys
+import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 
-from workers.acquisition import AcquisitionResult, CameraFaultError, run_acquisition
+import toliman_service as ts
+from workers.acquisition import AcquisitionResult, run_acquisition
 from workers.camera import CameraMode, RoiDefinition
 from workers.config import ConfigError, SessionConfig, SystemConfig
 
 logger = logging.getLogger(__name__)
+
 
 
 # ---------------------------------------------------------------------------
@@ -165,118 +186,214 @@ class SessionStatus:
         )
 
 
+
 # ---------------------------------------------------------------------------
-# CSP interface — STUB
+# Executive interface (SID 2 on the executive's Unix socket)
 # ---------------------------------------------------------------------------
+
+SID_CAMERA = 2
+
+CMD_START = 0x01
+CMD_STOP  = 0x02
+
+# Service-defined reply codes (0x02-0xEF, docs/icd.md "Camera")
+WRONG_LENGTH   = 0x02
+INVALID_PARAMS = 0x03
+BUSY           = 0x04
+NOT_RUNNING    = 0x05
+
+# START parameters; the ROI size at the end is optional
+_START = struct.Struct("<BfIifB32s")
+_START_ROI = struct.Struct("<HH")
+
+_MODES = {
+    0: CameraMode.SINGLE_ROI,
+    1: CameraMode.MULTI_ROI,
+    2: CameraMode.FULL_FRAME,
+}
+
+# session_id ends up in file names in data_dir and log_dir
+_SESSION_ID = re.compile(r"[A-Za-z0-9_\-][A-Za-z0-9_.\-]*")
+
+# Keeps an event line short in the executive's event log
+_EVENT_MAX = 200
+
 
 class CommandTimeout(Exception):
-    """Raised by CspInterface.receive_command() if no command arrives in time."""
+    """Raised by ExecutiveInterface.receive_command() if no command arrives in time."""
 
 
-class CspInterface:
+class CommandError(Exception):
+    """A rejected command; `code` is the port 23 reply."""
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def parse_start_command(params: bytes) -> SessionCommand:
     """
-    Interface to the CubeSat Space Protocol stack.
+    Deserialise the START parameters (see the module docstring) into a
+    SessionCommand. Raises CommandError with the reply code if they are
+    malformed; range checks against the system config happen in
+    command_to_session_config().
+    """
+    if len(params) not in (_START.size, _START.size + _START_ROI.size):
+        raise CommandError(
+            WRONG_LENGTH,
+            f"START has {len(params)} bytes, expected {_START.size} or "
+            f"{_START.size + _START_ROI.size}",
+        )
+    mode, rate, exposure, n_frames, duration, diag, raw_id = _START.unpack_from(params)
+    roi_w, roi_h = (
+        _START_ROI.unpack_from(params, _START.size)
+        if len(params) > _START.size else (0, 0)
+    )
 
-    THIS IS A STUB. The methods below define the API; the implementation
-    must be filled in once mission parameters are agreed (node address, 
-    port assignments, packet format).
+    if mode not in _MODES:
+        raise CommandError(INVALID_PARAMS, f"unknown mode {mode}")
+    if not math.isfinite(rate) or not math.isfinite(duration) or duration < 0:
+        raise CommandError(INVALID_PARAMS, "frame rate or duration out of range")
+    if n_frames == 0 or n_frames < -1:
+        raise CommandError(INVALID_PARAMS, f"n_frames {n_frames}")
+    if diag not in (0, 1):
+        raise CommandError(INVALID_PARAMS, f"diagnostics flag {diag}")
+    session_id = raw_id.split(b"\0", 1)[0].decode("ascii", "replace")
+    if not _SESSION_ID.fullmatch(session_id):
+        raise CommandError(INVALID_PARAMS, f"session id {session_id!r}")
+
+    return SessionCommand(
+        session_id=session_id,
+        mode=_MODES[mode],
+        frame_rate_hz=rate,
+        exposure_us=exposure,
+        n_frames=None if n_frames == -1 else n_frames,
+        duration_s=None if duration == 0.0 else duration,
+        roi_width=roi_w or None,
+        roi_height=roi_h or None,
+        enable_diagnostics=bool(diag),
+    )
+
+
+class ExecutiveInterface(ts.Service):
+    """
+    The Camera service (SID 2) on the executive's Unix socket.
+
+    toliman_service.run() keeps the connection (and reconnects after an
+    executive restart) on a background thread and calls command() for each
+    port 23 command. START is validated there and handed to the supervisor's
+    main loop through receive_command(); the reply goes back at once, since
+    the OBC gives up on a reply after 5 s.
 
     Parameters
     ----------
-    node_address : int
-        This node's CSP address. To be assigned during mission integration.
-    command_port : int
-        CSP port to listen on for incoming START commands from the OBC.
-    telemetry_port : int
-        CSP port to send status messages to on the OBC node.
-    obc_address : int
-        CSP address of the OBC node.
-    command_timeout_s : float
-        How long to wait for a command before raising CommandTimeout.
+    system : SystemConfig
+        Used to validate START against the sensor geometry.
+    socket_path : str, optional
+        The executive's socket; default TOLIMAN_IPC_SOCKET or
+        /tmp/toliman-executive.sock.
     """
 
-    def __init__(
-        self,
-        node_address: int,
-        command_port: int,
-        telemetry_port: int,
-        obc_address: int,
-        command_timeout_s: float = 0.0,
-    ) -> None:
-        self._node_address      = node_address
-        self._command_port      = command_port
-        self._telemetry_port    = telemetry_port
-        self._obc_address       = obc_address
-        self._command_timeout_s = command_timeout_s
+    def __init__(self, system: SystemConfig, socket_path: Optional[str] = None) -> None:
+        self._system = system
+        self._socket_path = socket_path
+        self._ctx = ts.Context()
+        self._commands: "queue.Queue[Tuple[SessionCommand, SessionConfig]]" = queue.Queue()
+        self._lock = threading.Lock()
+        self._busy = False
+        self._disconnect = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        # Shared with the acquisition process; set by STOP and on shutdown
+        self.stop_session = multiprocessing.Event()
 
-        logger.info(
-            "CspInterface stub initialised: node=%d command_port=%d "
-            "telemetry_port=%d obc=%d",
-            node_address, command_port, telemetry_port, obc_address,
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=ts.run,
+            args=(SID_CAMERA, self),
+            kwargs={
+                "socket_path": self._socket_path,
+                "stop": self._disconnect,
+                "ctx": self._ctx,
+            },
+            name="executive-ipc",
+            daemon=True,
         )
+        self._thread.start()
 
-        # TODO: initialise libcsp
-        # import csp
-        # csp.init(node_address, "imageservice", "1.0", 10, 300, 10)
-        # csp.zmqhub_init(node_address, "localhost")  # or appropriate interface
-        # csp.rtable_load("0/0 ZMQHUB")
-        # csp.route_start_task()
+    def close(self, flush_s: float = 1.0) -> None:
+        """Gives queued events (the last status) flush_s to go out, then disconnects."""
+        deadline = time.monotonic() + flush_s
+        while not self._ctx._queue.empty() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.1)   # the last event may be dequeued but not yet sent
+        self._disconnect.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
 
-    def receive_command(self) -> SessionCommand:
+    # --- toliman_service.Service ---
+
+    def command(self, ctx: ts.Context, command: int, params: bytes) -> int:
+        if command == CMD_START:
+            return self._start(ctx, params)
+        if command == CMD_STOP:
+            if params:
+                return WRONG_LENGTH
+            with self._lock:
+                if not self._busy:
+                    return NOT_RUNNING
+                self.stop_session.set()
+            ctx.event("STOP: ending the session")
+            return ts.OK
+        logger.warning("Unknown command 0x%02X", command)
+        return ts.ERROR
+
+    def connected(self, ctx: ts.Context) -> None:
+        logger.info("Connected to the executive as SID %d.", SID_CAMERA)
+
+    def _start(self, ctx: ts.Context, params: bytes) -> int:
+        try:
+            command = parse_start_command(params)
+            session = command_to_session_config(command, self._system)
+        except CommandError as e:
+            logger.warning("START rejected: %s", e)
+            ctx.event(f"START rejected: {e}"[:_EVENT_MAX])
+            return e.code
+        except (ConfigError, ValueError) as e:
+            logger.warning("START rejected: %s", e)
+            ctx.event(f"START rejected: {e}"[:_EVENT_MAX])
+            return INVALID_PARAMS
+        with self._lock:
+            if self._busy:
+                return BUSY
+            self._busy = True
+            self.stop_session.clear()
+        self._commands.put((command, session))
+        ctx.event(
+            f"START {command.session_id}: {command.mode.name} "
+            f"{command.frame_rate_hz:g} Hz {command.exposure_us} us "
+            f"n_frames={command.n_frames} duration={command.duration_s}"[:_EVENT_MAX]
+        )
+        return ts.OK
+
+    # --- used by the supervisor main loop ---
+
+    def receive_command(self, timeout_s: Optional[float]) -> Tuple[SessionCommand, SessionConfig]:
         """
-        Block until a START command packet arrives from the OBC.
-
-        Returns a parsed SessionCommand.
-        Raises CommandTimeout if no command arrives within command_timeout_s
-        (or blocks indefinitely if command_timeout_s == 0).
-
-        STUB — returns a hardcoded test command for development.
-
-        TODO: replace with real CSP receive logic:
-            socket = csp.socket()
-            csp.bind(socket, self._command_port)
-            csp.listen(socket, 10)
-            conn = csp.accept(socket, int(self._command_timeout_s * 1000))
-            if conn is None:
-                raise CommandTimeout(...)
-            packet = csp.read(conn, 1000)
-            return self._parse_command_packet(packet.data)
+        Block until a START has been accepted, for at most timeout_s seconds
+        (None = indefinitely). Raises CommandTimeout.
         """
-        logger.warning(
-            "CspInterface.receive_command() is a STUB — "
-            "returning hardcoded test command."
-        )
-        # Stub: return a test command immediately
-        return SessionCommand(
-            session_id=f"stub_{int(time.time())}",
-            mode=CameraMode.SINGLE_ROI,
-            frame_rate_hz=100.0,
-            exposure_us=2_500,
-            n_frames=None,
-            duration_s=10,
-            enable_diagnostics=False,
-        )
+        try:
+            return self._commands.get(timeout=timeout_s)
+        except queue.Empty:
+            raise CommandTimeout() from None
+
+    def session_finished(self) -> None:
+        """Allows the next START."""
+        with self._lock:
+            self._busy = False
 
     def send_status(self, status: SessionStatus) -> None:
-        """
-        Send a SessionStatus message to the OBC.
-
-        STUB — logs the status to file only.
-
-        TODO: replace with real CSP send logic:
-            packet_bytes = self._serialise_status(status)
-            csp.transaction(
-                self._obc_address,
-                self._telemetry_port,
-                1000,  # timeout ms
-                packet_bytes, len(packet_bytes),
-                None, 0,
-            )
-        """
-        logger.warning(
-            "CspInterface.send_status() is a STUB — "
-            "status not transmitted to OBC."
-        )
+        """Report a session outcome to the OBC as an event."""
         logger.info(
             "SESSION STATUS: session=%s success=%s fault=%s "
             "frames=%d dropped=%d elapsed=%.1fs rate=%.2fHz",
@@ -285,40 +402,16 @@ class CspInterface:
             status.elapsed_s, status.actual_rate_hz,
         )
         if status.fault:
-            logger.critical(
-                "CAMERA FAULT: %s", status.fault_message
-            )
-
-    def _parse_command_packet(self, data: bytes) -> SessionCommand:
-        """
-        Deserialise a raw CSP packet into a SessionCommand.
-
-        STUB — packet format to be defined during mission integration.
-
-        Suggested format (struct, little-endian):
-            uint8   mode          (0=SINGLE_ROI, 1=MULTI_ROI, 2=FULL_FRAME)
-            float32 frame_rate_hz
-            uint32  exposure_us
-            int32   n_frames      (-1 = None)
-            float32 duration_s    (0.0 = None)
-            uint8   diagnostics   (0 or 1)
-            char[32] session_id   (null-terminated)
-        """
-        raise NotImplementedError(
-            "_parse_command_packet() must be implemented once the "
-            "CSP packet format is agreed with the OBC team."
+            logger.critical("CAMERA FAULT: %s", status.fault_message)
+        outcome = "ok" if status.success else ("FAULT" if status.fault else "failed")
+        line = (
+            f"session {status.session_id} {outcome}: "
+            f"{status.frames_acquired} frames, {status.frames_dropped} dropped, "
+            f"{status.elapsed_s:.1f} s, {status.actual_rate_hz:.2f} Hz"
         )
-
-    def _serialise_status(self, status: SessionStatus) -> bytes:
-        """
-        Serialise a SessionStatus into a raw CSP telemetry packet.
-
-        STUB — packet format to be defined during mission integration.
-        """
-        raise NotImplementedError(
-            "_serialise_status() must be implemented once the "
-            "CSP telemetry format is agreed with the OBC team."
-        )
+        if status.fault_message:
+            line += f"; {status.fault_message}"
+        self._ctx.event(line[:_EVENT_MAX])
 
 
 # ---------------------------------------------------------------------------
@@ -399,39 +492,51 @@ def command_to_session_config(
     )
 
 
-def _configure_logging(system: SystemConfig, session_id: str) -> None:
-    """Set up file logging for this supervisor session."""
+
+def _session_log_handler(system: SystemConfig, session_id: str) -> logging.Handler:
+    """Add a DEBUG file log for one session; remove it with _end_session_log()."""
     os.makedirs(system.log_dir, exist_ok=True)
     log_path = os.path.join(
         system.log_dir, f"{session_id}_supervisor.log"
     )
     handler = logging.FileHandler(log_path)
+    handler.setLevel(logging.DEBUG)
     handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
     ))
     root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
-    # Also print INFO and above to stdout for local monitoring
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.INFO)
-    console.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)-8s %(message)s"
-    ))
-    root.addHandler(console)
+    return handler
+
+
+def _end_session_log(handler: logging.Handler) -> None:
+    root = logging.getLogger()
+    root.removeHandler(handler)
+    handler.close()
+    root.setLevel(logging.INFO)
+
+
+def _acquisition_entry(*args, **kwargs) -> None:
+    """run_acquisition() with default signal handling (fork copies the supervisor's)."""
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    run_acquisition(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
 # Main supervisor logic
 # ---------------------------------------------------------------------------
 
+# Time the acquisition process gets to finish after a stop request
+STOP_GRACE_S = 10.0
+
+
 def run_supervisor(
     config_path: str,
-    csp_node_address: int,
-    csp_command_port: int,
-    csp_telemetry_port: int,
-    csp_obc_address: int,
+    socket_path: Optional[str] = None,
     command_timeout_s: float = 0.0,
+    once: bool = False,
     dry_run: bool = False,
 ) -> int:
     """
@@ -441,61 +546,88 @@ def run_supervisor(
     ----------
     config_path : str
         Path to the JSON system config file.
-    csp_node_address : int
-        This node's CSP address.
-    csp_command_port : int
-        CSP port to listen on for commands.
-    csp_telemetry_port : int
-        CSP port to send status to on the OBC.
-    csp_obc_address : int
-        CSP address of the OBC.
+    socket_path : str, optional
+        The executive's Unix socket (default TOLIMAN_IPC_SOCKET or
+        /tmp/toliman-executive.sock).
     command_timeout_s : float
-        Seconds to wait for a command (0 = wait indefinitely).
+        Exit if no START arrives for this many seconds (0 = wait indefinitely).
+    once : bool
+        Exit after one session: 0 = success, 1 = invalid or crashed session,
+        2 = camera fault.
     dry_run : bool
-        If True, validate config and CSP init only — do not launch acquisition.
+        If True, validate the config only — do not connect or launch acquisition.
     """
-
-    # --- Load system config ---
-    try:
-        system = SystemConfig.from_file(config_path)
-    except ConfigError as e:
-        logging.critical("Failed to load system config: %s", e)
-        return 1
 
     # --- Basic logging before we have a session ID ---
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
+    # Session file logs record DEBUG; the console stays at INFO
+    for h in logging.getLogger().handlers:
+        h.setLevel(logging.INFO)
+
+    # --- Load system config ---
+    try:
+        system = SystemConfig.from_file(config_path)
+    except ConfigError as e:
+        logger.critical("Failed to load system config: %s", e)
+        return 1
     logger.info("Supervisor starting. Config: %s", config_path)
 
-    # --- Initialise CSP interface ---
-    csp = CspInterface(
-        node_address=csp_node_address,
-        command_port=csp_command_port,
-        telemetry_port=csp_telemetry_port,
-        obc_address=csp_obc_address,
-        command_timeout_s=command_timeout_s,
-    )
-
     if dry_run:
-        logger.info("Dry run complete — config and CSP interface initialised OK.")
+        logger.info("Dry run complete — config OK.")
         return 0
 
-    # --- Wait for START command from OBC ---
-    logger.info(
-        "Waiting for START command on CSP port %d%s...",
-        csp_command_port,
-        f" (timeout {command_timeout_s:.0f}s)" if command_timeout_s > 0 else "",
-    )
+    # --- Connect to the executive ---
+    executive = ExecutiveInterface(system, socket_path)
+    shutdown = threading.Event()
+
+    def _on_signal(signum, _frame):
+        logger.info("Signal %d — stopping.", signum)
+        shutdown.set()
+        executive.stop_session.set()
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+    executive.start()
+
     try:
-        command = csp.receive_command()
-    except CommandTimeout:
-        logger.warning(
-            "No command received within %.0fs — exiting.", command_timeout_s
-        )
-        return 0
+        idle_since = time.monotonic()
+        while not shutdown.is_set():
+            # Poll so a signal or the idle timeout ends the wait
+            try:
+                command, session = executive.receive_command(timeout_s=0.5)
+            except CommandTimeout:
+                if (command_timeout_s > 0
+                        and time.monotonic() - idle_since >= command_timeout_s):
+                    logger.warning(
+                        "No command received within %.0fs — exiting.",
+                        command_timeout_s,
+                    )
+                    return 0
+                continue
 
+            try:
+                code = _run_session(system, executive, command, session, shutdown)
+            finally:
+                executive.session_finished()
+            if once:
+                return code
+            idle_since = time.monotonic()
+        return 0
+    finally:
+        executive.close()
+
+
+def _run_session(
+    system: SystemConfig,
+    executive: ExecutiveInterface,
+    command: SessionCommand,
+    session: SessionConfig,
+    shutdown: threading.Event,
+) -> int:
+    """Run one accepted START to completion; returns the --once exit code."""
     logger.info(
         "Received command: session=%s mode=%s rate=%.1fHz "
         "exposure=%dus n_frames=%s duration=%s",
@@ -503,30 +635,29 @@ def run_supervisor(
         command.frame_rate_hz, command.exposure_us,
         command.n_frames, command.duration_s,
     )
-
-    # --- Set up session logging ---
-    _configure_logging(system, command.session_id)
-
-    # --- Build SessionConfig ---
+    log_handler = _session_log_handler(system, command.session_id)
     try:
-        session = command_to_session_config(command, system)
-    except ConfigError as e:
-        logger.error("Invalid session command: %s", e)
-        csp.send_status(SessionStatus(
-            session_id=command.session_id,
-            success=False, fault=False,
-            fault_message=f"Invalid command: {e}",
-            frames_acquired=0, frames_dropped=0,
-            elapsed_s=0.0, actual_rate_hz=0.0,
-        ))
-        return 1
+        return _supervise_acquisition(system, executive, command, session, shutdown)
+    finally:
+        _end_session_log(log_handler)
 
+
+def _supervise_acquisition(
+    system: SystemConfig,
+    executive: ExecutiveInterface,
+    command: SessionCommand,
+    session: SessionConfig,
+    shutdown: threading.Event,
+) -> int:
     # --- Launch acquisition subprocess ---
     result_queue = multiprocessing.Queue()
     proc = multiprocessing.Process(
-        target=run_acquisition,
+        target=_acquisition_entry,
         args=(system, session, result_queue),
-        kwargs={"enable_diagnostics": command.enable_diagnostics},
+        kwargs={
+            "enable_diagnostics": command.enable_diagnostics,
+            "stop_event": executive.stop_session,
+        },
         name=f"acquisition-{command.session_id}",
     )
 
@@ -540,33 +671,39 @@ def run_supervisor(
 
     # --- Monitor subprocess ---
     result: Optional[AcquisitionResult] = None
+    stop_deadline: Optional[float] = None
     try:
         # Block until the acquisition process posts its result.
-        # Use a poll loop so we can log heartbeat messages and detect
-        # if the process dies without posting a result.
+        # Use a poll loop so we can log heartbeat messages, detect
+        # if the process dies without posting a result, and give up on
+        # it if it ignores a stop request.
         while proc.is_alive():
             try:
-                result = result_queue.get(timeout=5.0)
+                result = result_queue.get(timeout=1.0)
                 break
-            except Exception:
-                # Queue empty after 5s — process still running, log heartbeat
-                elapsed = time.monotonic() - t_launch
+            except queue.Empty:
+                now = time.monotonic()
+                if shutdown.is_set() and stop_deadline is None:
+                    stop_deadline = now + STOP_GRACE_S
+                if stop_deadline is not None and now >= stop_deadline:
+                    logger.error("Acquisition did not stop within %.0fs.", STOP_GRACE_S)
+                    break
                 logger.debug(
                     "Acquisition running... elapsed=%.0fs pid=%d",
-                    elapsed, proc.pid,
+                    now - t_launch, proc.pid,
                 )
 
         # If process exited without posting a result, something went wrong
         if result is None:
             try:
-                result = result_queue.get_nowait()
-            except Exception:
+                result = result_queue.get(timeout=0.5)
+            except queue.Empty:
                 logger.error(
                     "Acquisition process (pid=%d) exited without posting "
                     "a result (exit code=%s).",
                     proc.pid, proc.exitcode,
                 )
-                status = SessionStatus(
+                executive.send_status(SessionStatus(
                     session_id=command.session_id,
                     success=False, fault=True,
                     fault_message=(
@@ -576,12 +713,13 @@ def run_supervisor(
                     frames_acquired=0, frames_dropped=0,
                     elapsed_s=time.monotonic() - t_launch,
                     actual_rate_hz=0.0,
-                )
-                csp.send_status(status)
+                ))
                 return 1
 
     finally:
         # Ensure process is cleaned up
+        if proc.is_alive():
+            proc.join(timeout=5.0)
         if proc.is_alive():
             logger.warning("Acquisition process still alive — terminating.")
             proc.terminate()
@@ -612,7 +750,8 @@ def run_supervisor(
 
     # --- Report to OBC ---
     status = SessionStatus.from_result(result)
-    csp.send_status(status)
+    _save_session_record(result, status, system)
+    executive.send_status(status)
 
     return 0 if not result.fault else 2
 
@@ -631,52 +770,91 @@ def _save_diagnostics(result: AcquisitionResult, system: SystemConfig) -> None:
         logger.error("Failed to save diagnostics: %s", e)
 
 
+def _save_session_record(
+    result: AcquisitionResult,
+    status: SessionStatus,
+    system: SystemConfig,
+) -> None:
+    """
+    Save <session_id>_session.json in the data directory: the outcome and the
+    camera-clock to Unix time reference, so frames, diagnostics and centroids
+    stamped with the camera's timestamp_ns can be placed in UTC on the ground.
+
+    clock_offset_ns = unix_time_ns - timestamp_ns, at the first and last
+    frame; the two differ by the camera clock's drift over the session.
+    """
+    def _clock(pair):
+        if pair is None:
+            return None
+        camera_ns, unix_ns = pair
+        return {
+            "timestamp_ns": camera_ns,
+            "unix_time_ns": unix_ns,
+            "clock_offset_ns": unix_ns - camera_ns,
+        }
+
+    record = {
+        "session_id": result.session_id,
+        "start_unix_ns": result.start_unix_ns,
+        "elapsed_s": result.elapsed_s,
+        "first_frame": _clock(result.clock_first),
+        "last_frame": _clock(result.clock_last),
+        "frames_acquired": result.frames_acquired,
+        "frames_written": result.frames_written,
+        "frames_dropped_buffer": result.frames_dropped_buffer,
+        "n_centroid_none": result.n_centroid_none,
+        "n_camera_errors": result.n_camera_errors,
+        "n_reconnects": result.n_reconnects,
+        "success": status.success,
+        "fault": status.fault,
+        "fault_message": status.fault_message,
+    }
+    path = os.path.join(system.data_dir, f"{result.session_id}_session.json")
+    try:
+        with open(path, "w") as f:
+            json.dump(record, f, indent=2)
+        logger.info("Session record saved to: %s", path)
+    except OSError as e:
+        logger.error("Failed to save session record: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Toliman image service supervisor."
+        description="Toliman image service supervisor (SEC Camera service, SID 2)."
     )
     parser.add_argument(
         "--config", required=True,
         help="Path to system config JSON file.",
     )
     parser.add_argument(
-        "--csp-node", type=int, default=0,
-        help="This node's CSP address (default: 0 — update for your mission).",
-    )
-    parser.add_argument(
-        "--csp-command-port", type=int, default=10,
-        help="CSP port to listen on for commands (default: 10).",
-    )
-    parser.add_argument(
-        "--csp-telemetry-port", type=int, default=11,
-        help="CSP port to send status to on the OBC (default: 11).",
-    )
-    parser.add_argument(
-        "--csp-obc", type=int, default=1,
-        help="CSP address of the OBC node (default: 1).",
+        "--socket", default=None,
+        help="The executive's Unix socket (default: $TOLIMAN_IPC_SOCKET or "
+             f"{ts.DEFAULT_SOCKET}).",
     )
     parser.add_argument(
         "--timeout", type=float, default=0.0,
-        help="Seconds to wait for a command before exiting (0 = indefinite).",
+        help="Exit if no START arrives for this many seconds (0 = indefinite).",
+    )
+    parser.add_argument(
+        "--once", action="store_true",
+        help="Exit after one session, with a non-zero code on failure.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Validate config and CSP init only — do not launch acquisition.",
+        help="Validate config only — do not connect or launch acquisition.",
     )
 
     args = parser.parse_args()
 
     exit_code = run_supervisor(
         config_path=args.config,
-        csp_node_address=args.csp_node,
-        csp_command_port=args.csp_command_port,
-        csp_telemetry_port=args.csp_telemetry_port,
-        csp_obc_address=args.csp_obc,
+        socket_path=args.socket,
         command_timeout_s=args.timeout,
+        once=args.once,
         dry_run=args.dry_run,
     )
     sys.exit(exit_code)

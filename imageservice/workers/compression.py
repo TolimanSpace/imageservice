@@ -503,6 +503,11 @@ def _write_netcdf(
         ht.units      = "seconds"
         ht[:]         = [m["host_time"] for m in batch_meta]
 
+        ut = ds.createVariable("unix_time_ns", "i8", ("frame",))
+        ut.long_name  = "SEC Unix time at frame acquisition (-1 if not recorded)"
+        ut.units      = "nanoseconds since 1970-01-01T00:00:00Z"
+        ut[:]         = [m.get("unix_time_ns", -1) for m in batch_meta]
+
         nd = ds.createVariable("nframes_dropped", "i4", ("frame",))
         nd.long_name  = "Frames dropped before this frame (from acq_nframe gap)"
         nd[:]         = [m["nframes_dropped"] for m in batch_meta]

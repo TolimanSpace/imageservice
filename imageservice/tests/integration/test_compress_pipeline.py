@@ -42,7 +42,9 @@ class TestCompressionPipeline:
             for i in range(n):
                 acq = AcquiredFrame(
                     frame_id=i, timestamp_ns=i * 1_000_000,
-                    host_time=float(i), mode=CameraMode.SINGLE_ROI,
+                    host_time=float(i),
+                    unix_time_ns=1_700_000_000_000_000_000 + i * 1_000_000,
+                    mode=CameraMode.SINGLE_ROI,
                     rois={}, nframes_dropped=0,
                 )
                 writer.push(frame_stack[i], acq)
