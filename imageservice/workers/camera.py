@@ -8,7 +8,10 @@ from typing import Optional, List, Dict
 
 import numpy as np
 
-from ximea import xiapi
+try:
+    from ximea import xiapi
+except ImportError:  # no XIMEA API installed: only the simulated camera works
+    xiapi = None
 
 logger = logging.getLogger(__name__)
 
@@ -278,8 +281,15 @@ class XimeaCamera:
     MAX_PIXEL_VALUE: int = 4095
 
     def __init__(self, config: CameraConfig, _xiapi=None) -> None:
-        import ximea.xiapi as _real_xiapi
-        self._xiapi = _xiapi if _xiapi is not None else _real_xiapi
+        if _xiapi is None:
+            from workers import sim_xiapi
+            if sim_xiapi.enabled():
+                # TOLIMAN_CAMERA_SIM: a simulated camera (workers/sim_xiapi.py)
+                logger.warning("TOLIMAN_CAMERA_SIM is set: using the simulated camera")
+                _xiapi = sim_xiapi
+            else:
+                import ximea.xiapi as _xiapi
+        self._xiapi = _xiapi
         self._config = config
         self._cam: Optional[xiapi.Camera] = None
         self._img: Optional[xiapi.Image] = None

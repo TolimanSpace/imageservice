@@ -131,6 +131,7 @@ class SystemConfig:
       camera.transport_buffer_size    8
       camera.output_bit_depth         12
       centroid.min_total_intensity    1.0
+      centroid.subtract_background    false
       writer.ring_buffer_n_frames     256
       writer.flush_timeout_s          5.0
       compression.batch_size_n        50
@@ -166,6 +167,9 @@ class SystemConfig:
     # --- Paths ---
     data_dir: str
     log_dir: str
+
+    # --- Centroid (optional; defaulted so existing constructors keep working) ---
+    centroid_subtract_background: bool = False
 
     # ------------------------------------------------------------------
     # Loading
@@ -221,7 +225,8 @@ class SystemConfig:
 
         # centroid
         cen = _section(raw, "centroid", required=False) or {}
-        _warn_extra_keys(cen, ["min_total_intensity"], "centroid")
+        _warn_extra_keys(cen, ["min_total_intensity", "subtract_background"],
+                         "centroid")
 
         # writer
         wri = _section(raw, "writer", required=False) or {}
@@ -251,6 +256,8 @@ class SystemConfig:
             sensor_height=_int(sen, "height", "sensor"),
             centroid_min_total_intensity=float(
                 cen.get("min_total_intensity", 1.0)),
+            centroid_subtract_background=bool(
+                cen.get("subtract_background", False)),
             writer_ring_buffer_n_frames=int(
                 wri.get("ring_buffer_n_frames", 256)),
             writer_flush_timeout_s=float(wri.get("flush_timeout_s", 5.0)),
@@ -341,6 +348,7 @@ class SystemConfig:
             },
             "centroid": {
                 "min_total_intensity": self.centroid_min_total_intensity,
+                "subtract_background": self.centroid_subtract_background,
             },
             "writer": {
                 "ring_buffer_n_frames": self.writer_ring_buffer_n_frames,
@@ -468,6 +476,7 @@ class SystemConfig:
             },
             "centroid": {
                 "min_total_intensity": 1.0,
+                "subtract_background": False,
             },
             "writer": {
                 "ring_buffer_n_frames": 256,

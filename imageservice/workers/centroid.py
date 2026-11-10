@@ -85,9 +85,38 @@ class PointingError:
 # Centroid calculation
 #-----------------------------------
 
+# Pixels at most this many background standard deviations above the background
+# carry no weight when the background is subtracted. At 3 sigma, the ~0.1% of
+# noise pixels above it (about 20 in a 128x128 ROI) sit far from the star and
+# shift the centroid by tenths of a pixel; at 5 sigma, practically none do.
+BACKGROUND_THRESHOLD_SIGMA: float = 5.0
+
+
+def estimate_background(image: np.ndarray, border: int = 2) -> tuple:
+    """
+    Estimate the background level and its noise from the ROI's border.
+
+    Uses the outer `border` pixels on every side (where the star should not
+    be): the median is the level (bias + dark + sky) and 1.4826 x the median
+    absolute deviation is the noise standard deviation.
+
+    Returns
+    -------
+    (level, sigma) : tuple of float
+    """
+    edges = np.concatenate([
+        image[:border, :].ravel(), image[-border:, :].ravel(),
+        image[border:-border, :border].ravel(), image[border:-border, -border:].ravel(),
+    ]).astype(np.float64)
+    level = float(np.median(edges))
+    sigma = 1.4826 * float(np.median(np.abs(edges - level)))
+    return level, sigma
+
+
 def compute_centroid(
     image: np.ndarray,
-    min_total_intensity: float = 1.0
+    min_total_intensity: float = 1.0,
+    subtract_background: bool = False,
 ) -> Optional[CentroidResult]:
     """
     Compute the intensity-weighted centroid of a 2D image array
@@ -107,6 +136,13 @@ def compute_centroid(
         signal and None is returned. The defautl of 1.0 rejects only an
         all-zero case, but should be increased to a meaninful level in
         production.
+    subtract_background : bool
+        If True, subtract the background estimated from the ROI border
+        (estimate_background()) and give no weight to pixels within
+        BACKGROUND_THRESHOLD_SIGMA standard deviations of it. Without this
+        the bias (about 100 ADU per pixel) of a whole ROI outweighs the star
+        and pulls the centroid towards the ROI centre. total_intensity is
+        then the background-subtracted sum; peak_value stays the raw maximum.
 
     Returns
     -------
@@ -133,6 +169,13 @@ def compute_centroid(
         )
 
     n_rows, n_cols = image.shape
+    peak_value = int(image.max())
+
+    if subtract_background:
+        level, sigma = estimate_background(image)
+        signal = image.astype(np.float64) - level
+        signal[signal <= BACKGROUND_THRESHOLD_SIGMA * sigma] = 0.0
+        image = signal
 
     # Float64 to avoid uint16 overflow on large ROI
     total = image.sum(dtype=np.float64)
@@ -157,7 +200,7 @@ def compute_centroid(
         x = x,
         y = y,
         total_intensity = total,
-        peak_value = int(image.max())
+        peak_value = peak_value
     )
 
 #-------------------------------
@@ -173,6 +216,7 @@ def compute_pointing_error(
     timestamp_ns: int,
     frame_id: int,
     min_total_intensity: float = 1.0,
+    subtract_background: bool = False,
 ) -> Optional[PointingError]:
     """
     Compute the pointing error from the centre ROI image.
@@ -210,7 +254,7 @@ def compute_pointing_error(
         None if the centre ROI has insufficient signal
     """
 
-    centroid = compute_centroid(centre_roi, min_total_intensity)
+    centroid = compute_centroid(centre_roi, min_total_intensity, subtract_background)
 
     # Insufficient flux
     if centroid is None:

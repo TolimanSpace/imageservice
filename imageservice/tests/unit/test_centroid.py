@@ -176,3 +176,43 @@ class TestComputePointingError:
 
     def test_centre_roi_label_constant(self):
         assert CENTRE_ROI_LABEL == "centre"
+
+
+# ---------------------------------------------------------------------------
+# Background subtraction
+# ---------------------------------------------------------------------------
+
+def _star_on_bias(cx, cy, bias=100.0, peak=2000.0, sigma=1.5, noise=5.0, seed=3):
+    rng = np.random.default_rng(seed)
+    y, x = np.ogrid[:ROI_H, :ROI_W]
+    img = bias + peak * np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sigma ** 2))
+    img = img + rng.normal(0.0, noise, img.shape)
+    return np.clip(np.rint(img), 0, 4095).astype(np.uint16)
+
+
+class TestBackgroundSubtraction:
+
+    def test_bias_pulls_the_raw_centroid_towards_the_roi_centre(self):
+        img = _star_on_bias(80.0, 40.0)
+        r = compute_centroid(img)
+        # 100 ADU over 128x128 pixels outweighs the star: far from (80, 40)
+        assert abs(r.x - 80.0) > 5.0
+
+    def test_subtracted_centroid_finds_the_star(self):
+        img = _star_on_bias(80.3, 40.7)
+        r = compute_centroid(img, subtract_background=True)
+        assert abs(r.x - 80.3) < 0.05
+        assert abs(r.y - 40.7) < 0.05
+        assert r.peak_value == int(img.max())
+
+    def test_background_only_gives_no_signal(self):
+        rng = np.random.default_rng(1)
+        img = np.rint(100 + rng.normal(0, 5, (ROI_H, ROI_W))).astype(np.uint16)
+        assert compute_centroid(img, min_total_intensity=500.0, subtract_background=True) is None
+
+    def test_pointing_error_passes_it_through(self):
+        img = _star_on_bias(ROI_W / 2 + 3.0, ROI_H / 2 - 2.0)
+        pe = compute_pointing_error(img, OFF_X, OFF_Y, SENSOR_W, SENSOR_H, 0, 1,
+                                    subtract_background=True)
+        assert abs(pe.dx - 3.0) < 0.05
+        assert abs(pe.dy + 2.0) < 0.05

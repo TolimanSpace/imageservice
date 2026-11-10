@@ -12,7 +12,7 @@ configured frame rate. On each frame:
 
   1. acquire_frame()        - blocking call to the Ximea driver
   2. compute_pointing_error() - centroid of the centre ROI
-  3. publish_pointing_error() - send (dx, dy, timestamp) to serial port (stubbed)
+  3. publish_pointing_error() - Centroid datagram to the pointing service
   4. push to FrameWriter(s)  - one writer per data-bearing ROI
 
 The loop runs until one of:
@@ -46,12 +46,13 @@ diagnostic code paths are skipped entirely.
 The diagnostics array is returned in the result dict and can be saved or
 analysed after the session.
 
-IPC - serial publisher
-----------------------
-The serial publisher (pointing error → serial port → pointing controller)
-is stubbed here as _publish_pointing_error(). This will be implemented in
-serial_publisher.py once the protocol is agreed. The stub logs the pointing
-error at DEBUG level so the data flow is visible during development.
+Pointing publisher
+------------------
+Each frame's pointing error (or its absence) goes to the SEC's pointing
+service (SID 5) as one 32-byte Centroid datagram on a Unix socket
+(TOLIMAN_POINTING_SOCKET, default /tmp/toliman-pointing.sock); see
+workers/pointing_link.py. Sends never block: with no pointing service
+running, the datagrams are dropped.
 
 Usage
 -----
@@ -91,6 +92,7 @@ from workers.centroid import (
     compute_pointing_error,
 )
 from workers.config import SessionConfig, SystemConfig
+from workers.pointing_link import CentroidSender
 from workers.writer import FrameWriter
 from workers.process_timing_logger import TimingLogger
 
@@ -294,6 +296,9 @@ def _run(
         for label, shape in data_rois.items()
     }
 
+    # Centroid datagrams to the pointing service (TOLIMAN_POINTING_SOCKET)
+    centroid_sender = CentroidSender()
+
     # Acquisition-side timing logger
     acq_tlog = TimingLogger(
         component="acquisition",
@@ -381,14 +386,15 @@ def _run(
                         timestamp_ns=frame.timestamp_ns,
                         frame_id=frame.frame_id,
                         min_total_intensity=system.centroid_min_total_intensity,
+                        subtract_background=system.centroid_subtract_background,
                     )
 
                 if pointing is not None:
-                    _publish_pointing_error(pointing)
+                    _publish_pointing_error(centroid_sender, frame, pointing)
                     if enable_diagnostics: acq_tlog.end("centroid")
                 else:
                     n_centroid_none += 1
-                    _publish_no_signal(frame.frame_id, frame.timestamp_ns)
+                    _publish_no_signal(centroid_sender, frame, centre_roi)
                     if enable_diagnostics: acq_tlog.end("centroid")
 
                 t_centroid = time.perf_counter_ns() if enable_diagnostics else 0
@@ -432,6 +438,7 @@ def _run(
         fault = True
         fault_message = f"Unexpected error: {e}"
     finally:
+        centroid_sender.close()
         acq_tlog.close()
         for w in writers.values():
             w.stop()
@@ -590,18 +597,15 @@ def _get_centre_roi(
 
 
 # ---------------------------------------------------------------------------
-# Serial publisher stub
+# Pointing publisher
 # ---------------------------------------------------------------------------
 
-def _publish_pointing_error(pointing: PointingError) -> None:
+def _publish_pointing_error(
+    sender: CentroidSender, frame: AcquiredFrame, pointing: PointingError,
+) -> None:
     """
-    Publish a PointingError to the pointing controller via serial port.
-
-    STUB - to be implemented in serial_publisher.py once the framing
-    protocol is agreed with the pointing controller team.
-
-    When implemented this will open/reuse a serial.Serial handle and
-    write a framed binary packet containing (dx, dy, timestamp_ns, frame_id).
+    Send a PointingError to the pointing service as a Centroid datagram
+    (workers/pointing_link.py; non-blocking, dropped if nobody listens).
     """
     logger.debug(
         "POINTING: frame_id=%d  dx=%.4f  dy=%.4f  ts=%d  "
@@ -611,21 +615,21 @@ def _publish_pointing_error(pointing: PointingError) -> None:
         pointing.centroid.total_intensity,
         pointing.centroid.peak_value,
     )
+    sender.send_pointing(frame, pointing)
 
 
-def _publish_no_signal(frame_id: int, timestamp_ns: int) -> None:
+def _publish_no_signal(
+    sender: CentroidSender, frame: AcquiredFrame, centre_roi: Optional[np.ndarray],
+) -> None:
     """
-    Publish a sentinel to the pointing controller indicating no signal.
-
-    STUB - to be implemented alongside _publish_pointing_error().
-
-    The sentinel should be a distinguished packet value that the pointing
-    controller recognises as "star not detected - hold last good pointing".
+    Tell the pointing service the star was not detected in this frame
+    (a Centroid with the no-signal flag): it holds its last good pointing.
     """
     logger.debug(
         "POINTING: frame_id=%d  ts=%d  NO SIGNAL",
-        frame_id, timestamp_ns,
+        frame.frame_id, frame.timestamp_ns,
     )
+    sender.send_no_signal(frame, centre_roi)
 
 
 # ---------------------------------------------------------------------------
