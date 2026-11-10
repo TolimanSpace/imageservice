@@ -164,3 +164,37 @@ def test_no_plant_is_a_camera_error(sim_env, tmp_path):
     with XimeaCamera(_config()) as cam:
         with pytest.raises(sim_xiapi.Xi_error):
             cam.acquire_frame()
+
+
+def test_reports_its_geometry_like_xiapi(sim_env):
+    # The queries ximea_dev.ipynb makes of the bench camera
+    sim_env("static:0,0")
+    cam = sim_xiapi.Camera()
+    assert not cam.is_isexist
+    cam.open_device()
+    assert cam.is_isexist and cam.get_device_name() == b"MC203MG-SY-UB"
+    assert (cam.get_width(), cam.get_height(), cam.get_offsetX(), cam.get_offsetY()) == (SENSOR, SENSOR, 0, 0)
+    cam.set_width(848)
+    cam.set_height(848)
+    cam.set_offsetX(1984)
+    cam.set_offsetY(1984)
+    assert (cam.get_width(), cam.get_height(), cam.get_offsetX(), cam.get_offsetY()) == (848, 848, 1984, 1984)
+    assert (cam.get_region_mode(), cam.get_region_selector_maximum()) == (0, 0)
+    cam.close_device()
+
+
+def test_a_large_roi_keeps_up_at_100_hz(sim_env):
+    # ximea_dev.ipynb's 848 x 848 single ROI at 100 Hz
+    sim_env("static:1,1")
+    cfg = single_roi_config(width=848, height=848, offset_x=1984, offset_y=1984,
+                            exposure_us=1000, frame_rate_hz=100.0)
+    with XimeaCamera(cfg) as cam:
+        frames = [cam.acquire_frame() for _ in range(30)]
+    assert sum(f.nframes_dropped for f in frames) <= 1
+
+
+def test_star_off_the_roi_leaves_only_noise(sim_env):
+    sim_env("static:500,0")
+    with XimeaCamera(_config()) as cam:
+        img = cam.acquire_frame().rois["single_roi"]
+    assert img.max() < 150

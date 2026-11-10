@@ -9,7 +9,8 @@ frames a test loads into it, this camera renders each frame itself:
 
   - a star with a Gaussian PSF (pixel-integrated, so sub-pixel positions are
     exact), at the position the pointing plant reports, or at a fixed one;
-  - shot noise (Poisson) and read noise (Gaussian), then the camera model's
+  - shot noise (Poisson, drawn around the star) and read noise (Gaussian, from
+    a pool of 16 frames drawn when acquisition starts), then the camera model's
     QE, gain, bias and 12-bit clipping from sim_converter.py;
   - the configured ROI (width, height, offsets), exposure and frame rate.
     Frames are paced in real time on a fixed grid of 1 / frame rate; a
@@ -181,29 +182,55 @@ def _pixel_fractions(n: int, offset: int, centre: float, sigma: float) -> np.nda
     return np.diff(cdf)
 
 
+def read_noise_photons(settings: SimSettings, shape: Tuple[int, int], rng: np.random.Generator) -> np.ndarray:
+    """
+    One frame of read noise in photon units (electrons / QE, rounded; int32),
+    because sim_converter.photons_to_adu() applies QE after the simulator.
+    """
+    if settings.read_noise_e <= 0:
+        return np.zeros(shape, dtype=np.int32)
+    from sim_converter import get_camera_model
+
+    sigma = settings.read_noise_e / get_camera_model(settings.model).quantum_efficiency
+    return np.rint(rng.normal(0.0, sigma, size=shape)).astype(np.int32)
+
+
+# The star's Poisson draw covers this many PSF sigmas around it; beyond that
+# its expected photon count per pixel is below 1e-7 of the total.
+STAR_BOX_SIGMA = 6.0
+
+
 def render_photons(
     width: int, height: int, offset_x: int, offset_y: int,
     star_x: float, star_y: float, settings: SimSettings, exposure_s: float,
-    rng: np.random.Generator,
+    rng: np.random.Generator, read_noise: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Photon counts (int64, noise included) on a width x height region at
+    Photon counts (int32, noise included) on a width x height region at
     (offset_x, offset_y), for a star at sensor coordinates (star_x, star_y).
 
-    Read noise is added in photon units (electrons / QE) because
-    sim_converter.photons_to_adu() applies QE after the simulator.
+    `read_noise` is a frame from read_noise_photons() (drawn here if None).
+    Shot noise is drawn only in a box of STAR_BOX_SIGMA around the star, and
+    for the sky only if there is any, so a large ROI still renders in a few
+    milliseconds.
     """
-    from sim_converter import get_camera_model
+    if read_noise is None:
+        read_noise = read_noise_photons(settings, (height, width), rng)
+    photons = read_noise.astype(np.int32)  # a copy
+    if settings.sky_photons_per_px_s > 0:
+        photons += rng.poisson(settings.sky_photons_per_px_s * exposure_s, size=photons.shape).astype(np.int32)
 
-    fx = _pixel_fractions(width, offset_x, star_x, settings.psf_sigma_px)
-    fy = _pixel_fractions(height, offset_y, star_y, settings.psf_sigma_px)
-    mean = np.outer(fy, fx) * (settings.flux_photons_per_s * exposure_s)
-    mean += settings.sky_photons_per_px_s * exposure_s
-    photons = rng.poisson(mean).astype(np.float64)
-    if settings.read_noise_e > 0:
-        qe = get_camera_model(settings.model).quantum_efficiency
-        photons += rng.normal(0.0, settings.read_noise_e / qe, size=photons.shape)
-    return np.rint(photons).astype(np.int64)
+    r = STAR_BOX_SIGMA * settings.psf_sigma_px + 1.0
+    x0 = max(0, int(math.floor(star_x - r)) - offset_x)
+    x1 = min(width, int(math.ceil(star_x + r)) + 1 - offset_x)
+    y0 = max(0, int(math.floor(star_y - r)) - offset_y)
+    y1 = min(height, int(math.ceil(star_y + r)) + 1 - offset_y)
+    if x0 < x1 and y0 < y1:
+        fx = _pixel_fractions(x1 - x0, offset_x + x0, star_x, settings.psf_sigma_px)
+        fy = _pixel_fractions(y1 - y0, offset_y + y0, star_y, settings.psf_sigma_px)
+        mean = np.outer(fy, fx) * (settings.flux_photons_per_s * exposure_s)
+        photons[y0:y1, x0:x1] += rng.poisson(mean).astype(np.int32)
+    return photons
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +274,7 @@ class Camera:
         self._close_star = None
         self._rng: Optional[np.random.Generator] = None
         self._model = None
+        self._noise_pool: Optional[np.ndarray] = None
 
     # Lifecycle -------------------------------------------------------------
 
@@ -278,6 +306,7 @@ class Camera:
 
     def start_acquisition(self) -> None:
         self._require_open()
+        self._make_noise_pool()
         self._acquiring = True
         self._t0 = time.monotonic()
         self._last_index = -1
@@ -290,6 +319,16 @@ class Camera:
 
     def get_device_sn(self) -> bytes:
         return b"SIM00001"
+
+    def get_device_sens_sn(self) -> bytes:
+        return b"SIMSENSOR1"
+
+    def get_api_version(self) -> bytes:
+        return b"sim"
+
+    @property
+    def is_isexist(self) -> bool:
+        return self._open
 
     # Settings -------------------------------------------------------------
 
@@ -360,6 +399,28 @@ class Camera:
     def get_offsetY_increment(self) -> int:
         return 4
 
+    def get_width(self) -> int:
+        return self._width
+
+    def get_height(self) -> int:
+        return self._height
+
+    def get_offsetX(self) -> int:
+        return self._offset_x
+
+    def get_offsetY(self) -> int:
+        return self._offset_y
+
+    # One region only, like the bench camera in ximea_dev.ipynb (no multi-ROI mode)
+    def get_region_mode(self) -> int:
+        return 0
+
+    def get_region_selector(self) -> int:
+        return 0
+
+    def get_region_selector_maximum(self) -> int:
+        return 0
+
     # Acquisition ----------------------------------------------------------
 
     def get_image(self, img: Image, timeout: int = 1000) -> None:
@@ -390,6 +451,7 @@ class Camera:
             self._width, self._height, self._offset_x, self._offset_y,
             self._sensor_w / 2.0 + x, self._sensor_h / 2.0 + y,
             self._settings, self._exposure_us / 1e6, self._rng,
+            read_noise=self._next_read_noise(),
         )
         img._data = photons_to_adu(photons, self._model)
         img.width, img.height = self._width, self._height
@@ -400,6 +462,32 @@ class Camera:
         img.tsSec, img.tsUSec = divmod(ts_us, 1_000_000)
 
     # Helpers --------------------------------------------------------------
+
+    # Read noise frames are drawn ahead, at start_acquisition(), and reused in
+    # random order: a fresh normal draw per frame takes longer than a 100 Hz
+    # frame period for ROIs of a few hundred pixels. Regions above
+    # NOISE_POOL_MAX_PIXELS (full frames, a diagnostic mode at a few Hz) draw
+    # fresh noise per frame instead of holding a pool in memory.
+    NOISE_POOL_FRAMES = 16
+    NOISE_POOL_MAX_PIXELS = 1_000_000
+
+    def _make_noise_pool(self) -> None:
+        shape = (self._height, self._width)
+        if self._width * self._height > self.NOISE_POOL_MAX_PIXELS or self._width <= 0 or self._height <= 0:
+            self._noise_pool = None
+            return
+        if self._noise_pool is not None and self._noise_pool.shape[1:] == shape:
+            return
+        self._noise_pool = np.stack([
+            read_noise_photons(self._settings, shape, self._rng).astype(np.int16)
+            for _ in range(self.NOISE_POOL_FRAMES)
+        ])
+
+    def _next_read_noise(self) -> Optional[np.ndarray]:
+        pool = self._noise_pool
+        if pool is None or pool.shape[1:] != (self._height, self._width):
+            return None
+        return pool[self._rng.integers(len(pool))]
 
     @property
     def _sensor_w(self) -> int:
