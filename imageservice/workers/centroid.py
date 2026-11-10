@@ -137,7 +137,8 @@ def compute_centroid(
         all-zero case, but should be increased to a meaninful level in
         production.
     subtract_background : bool
-        If True, subtract the background estimated from the ROI border
+        If True (the service's default, SystemConfig.centroid_subtract_background),
+        subtract the background estimated from the ROI border
         (estimate_background()) and give no weight to pixels within
         BACKGROUND_THRESHOLD_SIGMA standard deviations of it. Without this
         the bias (about 100 ADU per pixel) of a whole ROI outweighs the star

@@ -77,6 +77,16 @@ class TestSystemConfigLoading:
         assert system_config.centroid_min_total_intensity == 1.0
         assert system_config.serial_port is None
         assert system_config.serial_baud_rate == 115200
+        assert system_config.centroid_subtract_background is True
+
+    def test_background_subtraction_can_be_disabled(self, system_config_dict, tmp_path):
+        system_config_dict["centroid"]["subtract_background"] = False
+        p = tmp_path / "cfg.json"
+        p.write_text(json.dumps(system_config_dict))
+        cfg = SystemConfig.from_file(str(p))
+        assert cfg.centroid_subtract_background is False
+        cfg.save(str(p))
+        assert SystemConfig.from_file(str(p)).centroid_subtract_background is False
 
     def test_extra_keys_ignored(self, system_config_dict, tmp_path):
         system_config_dict["unknown_section"] = {"foo": "bar"}

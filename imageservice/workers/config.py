@@ -131,7 +131,7 @@ class SystemConfig:
       camera.transport_buffer_size    8
       camera.output_bit_depth         12
       centroid.min_total_intensity    1.0
-      centroid.subtract_background    false
+      centroid.subtract_background    true
       writer.ring_buffer_n_frames     256
       writer.flush_timeout_s          5.0
       compression.batch_size_n        50
@@ -169,7 +169,8 @@ class SystemConfig:
     log_dir: str
 
     # --- Centroid (optional; defaulted so existing constructors keep working) ---
-    centroid_subtract_background: bool = False
+    # Subtract the ROI border's background before centroiding (workers/centroid.py)
+    centroid_subtract_background: bool = True
 
     # ------------------------------------------------------------------
     # Loading
@@ -257,7 +258,7 @@ class SystemConfig:
             centroid_min_total_intensity=float(
                 cen.get("min_total_intensity", 1.0)),
             centroid_subtract_background=bool(
-                cen.get("subtract_background", False)),
+                cen.get("subtract_background", True)),
             writer_ring_buffer_n_frames=int(
                 wri.get("ring_buffer_n_frames", 256)),
             writer_flush_timeout_s=float(wri.get("flush_timeout_s", 5.0)),
@@ -476,7 +477,7 @@ class SystemConfig:
             },
             "centroid": {
                 "min_total_intensity": 1.0,
-                "subtract_background": False,
+                "subtract_background": True,
             },
             "writer": {
                 "ring_buffer_n_frames": 256,
