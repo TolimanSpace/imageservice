@@ -1,5 +1,5 @@
 """
-compressor.py - Post-session compression pipeline.
+compression.py - Post-session compression pipeline.
 
 Reads the raw .bin and .jsonl files written by FrameWriter, processes
 them in batches of N frames, and produces netCDF4 files for downlink.
@@ -44,7 +44,7 @@ Usage
 -----
 Run from the command line after a session::
 
-    python compressor.py \\
+    python compression.py \\
         --data-dir /data/imageservice \\
         --session-id obs_2026_177_001 \\
         --config /etc/imageservice/config.json \\
@@ -139,10 +139,10 @@ class CompressionParams:
             # These are nominal values; measure precisely after optics
             # integration and pass the measured values as corner_angles.
             object.__setattr__(self, "corner_angles", {
-                "top_left":  135.0,
-                "top_right":  45.0,
-                "bot_left":   45.0,
-                "bot_right": 135.0,
+                "top_left":   45.0,
+                "top_right": 135.0,
+                "bot_left":  135.0,
+                "bot_right":  45.0,
             })
 
 
