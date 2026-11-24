@@ -1,0 +1,28 @@
+{
+  "camera": {
+    "_comment": "serial_number is required",
+    "serial_number": "CINAU2626000",
+    "transport_buffer_size": 8,
+    "output_bit_depth": 12
+  },
+  "sensor": {
+    "width": 4512,
+    "height": 4512
+  },
+  "centroid": {
+    "min_total_intensity": 1.0
+  },
+  "writer": {
+    "ring_buffer_n_frames": 256,
+    "flush_timeout_s": 5.0
+  },
+  "compression": {
+    "batch_size_n": 50,
+    "deflate_level": 5
+  },
+  "paths": {
+    "_comment": "data_dir and log_dir are required",
+    "data_dir": "/tmp/imageservice/data",
+    "log_dir": "/tmp/imageservice/logs"
+  }
+}
