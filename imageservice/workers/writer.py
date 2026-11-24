@@ -475,12 +475,12 @@ class FrameWriter:
 
     def _bin_path(self) -> str:
         return os.path.join(
-            self._data_dir, f"{self._session_id}_frames.bin"
+            self._data_dir, f"{self._session_id}_{self._roi_label}_frames.bin"
         )
 
     def _meta_path(self) -> str:
         return os.path.join(
-            self._data_dir, f"{self._session_id}_meta.jsonl"
+            self._data_dir, f"{self._session_id}_{self._roi_label}_meta.jsonl"
         )
 
     def _close_files(self) -> None:
