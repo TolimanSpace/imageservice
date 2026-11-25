@@ -51,7 +51,7 @@ DEFAULT_SIDELOBE_OFFSET = 1625
 DEFAULT_STRIP_WIDTH = 6
 
 # Default strip length in pixels along the dispersion axis
-DEFAULT_STRIP_LENGTH = 360
+DEFAULT_STRIP_LENGTH = 200
 
 # Default dispersion axis angle
 DEFAULT_ANGLE_DEGREES: Dict[str, float] = {
@@ -210,12 +210,41 @@ def crop_sidelobe_strip(
 
     return pixels_col_major[mask_col_major].reshape(len(complete_cols), width)
 
+def _fit_strip_to_length(
+        strip: np.ndarray,
+        length: int,
+        fill_value: float = 0
+) -> np.ndarray:
+    """
+    Trim or pad a strip along axis 0 so it has exactly 'length' rows.
+
+    Rows are trimmed from, or added to, both ends equally.
+    If the difference is odd, the extra row is removed/added to the bottom
+    """
+    n = strip.shape[0]
+    if n == length:
+        return strip
+
+    if n > length:
+        excess = n - length
+        top = excess // 2
+        return strip[top : top + length]
+
+    # else n < length
+    missing = length - n
+    pad_top = missing // 2
+    pad_bottom = missing - pad_top
+    pad_widths = [(pad_top, pad_bottom)] + [0,0] * (strip.ndim - 1)
+    return np.pad(strip, pad_widths, mode="constant", constant_values=fill_value)
+
 
 def crop_and_merge_corners(
     corner_rois: Dict[str, np.ndarray],
     star_positions_per_corner: Dict[str, Dict[str, List[float]]],
     corner_angles: Optional[Dict[str, float]] = None,
     width: int = DEFAULT_STRIP_WIDTH,
+    length: int = DEFAULT_STRIP_LENGTH,
+    fill_value: float = 0,
 ) -> Optional[np.ndarray]:
     """
     Extract strips from all corner regions of interest for all stars and merge
@@ -244,7 +273,7 @@ def crop_and_merge_corners(
                 width = width
             )
             if strip.shape[0] > 0:
-                strips.append(strip)
+                strips.append(_fit_strip_to_length(strip, length, fill_value))
             else:
                 logger.warning(
                     "crop_and_merge_corners: empty strip for label=%s "
@@ -255,8 +284,7 @@ def crop_and_merge_corners(
         logger.warning("crop_and_merge_corners: no valid strips extracted.")
         return None
 
-    min_rows = min(s.shape[0] for s in strips)
-    return np.concatenate([s[:min_rows] for s in strips], axis=1)
+    return np.concatenate(strips, axis=1)
 
 #-----------------
 # Old algorithm
